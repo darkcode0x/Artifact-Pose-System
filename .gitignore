@@ -1,0 +1,104 @@
+# Python virtual environments
+.venv/
+.venv311/
+venv/
+env/
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE/editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+*.bak
+
+# Native/CMake build artifacts
+*.o
+*.obj
+*.so
+*.dll
+*.dylib
+*.a
+*.lib
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+.ninja_log
+.ninja_deps
+CMakeConfigureLog.yaml
+
+# Server native build outputs
+server/native/build/
+server/native/build-*/
+server/native/install*/
+server/native/pose_solver_cpp/build*/
+server/native/third_party/
+server/native/third_party/g2o/build/
+server/native/third_party/g2o/build*/
+server/native/third_party/g2o/install/
+
+# Runtime artifacts
+server/uploads/
+embed/device_agent/mqtt_events.jsonl
+embed/device_agent/data/pictures/
+server/device_registry.json
+
+# Mobile app generated/dependency artifacts (Flutter)
+client/artifact_app/.dart_tool/
+client/artifact_app/.flutter-plugins
+client/artifact_app/.flutter-plugins-dependencies
+client/artifact_app/.packages
+client/artifact_app/.pub-cache/
+client/artifact_app/.pub/
+client/artifact_app/build/
+client/artifact_app/coverage/
+
+# Android generated outputs
+client/artifact_app/android/.gradle/
+client/artifact_app/android/local.properties
+client/artifact_app/android/app/debug/
+client/artifact_app/android/app/profile/
+client/artifact_app/android/app/release/
+
+# iOS/macOS generated dependencies
+client/artifact_app/ios/Flutter/ephemeral/
+client/artifact_app/ios/Pods/
+client/artifact_app/ios/.symlinks/
+client/artifact_app/macos/Flutter/ephemeral/
+client/artifact_app/macos/Pods/
+client/artifact_app/macos/.symlinks/
+
+# Linux/Windows Flutter ephemeral
+client/artifact_app/linux/flutter/ephemeral/
+client/artifact_app/windows/flutter/ephemeral/

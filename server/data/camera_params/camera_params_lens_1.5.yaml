@@ -1,0 +1,23 @@
+%YAML:1.0
+---
+image_width: 3840
+image_height: 2160
+camera_matrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 2922.2458367375621, 0., 1871.3666351471443, 0.,
+       2935.1434699736446, 1047.8804594857584, 0., 0., 1. ]
+distortion_coefficients: !!opencv-matrix
+   rows: 1
+   cols: 5
+   dt: d
+   data: [ -0.031752175612704742, 0.42244797282729785,
+       -0.0026833024527059611, 0.0008438063810937386,
+       -0.80008731644432018 ]
+lens_position: 1.5
+reprojection_error: 0.71283026203208311
+charuco_squares_x: 11
+charuco_squares_y: 8
+charuco_square_length: 0.040000000000000001
+charuco_marker_length: 0.025000000000000001

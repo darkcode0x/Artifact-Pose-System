@@ -1,0 +1,104 @@
+#ifndef DEVIATION_CALCULATOR_H
+#define DEVIATION_CALCULATOR_H
+
+#include <opencv2/opencv.hpp>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
+
+struct PoseDeviation {
+    // === Translation Deviations (meters) ===
+    double deltaX;
+    double deltaY;
+    double deltaZ;
+
+    double deltaPan;
+    double deltaTilt;
+    double deltaRoll;
+
+    double translationMag;   // sqrt(dX^2 + dY^2 + dZ^2)
+    double rotationMag;      // sqrt(pan^2 + tilt^2 + roll^2)
+
+    bool withinTransTolerance;
+    bool withinRotTolerance;
+    bool withinTolerance;
+
+    PoseDeviation() :
+        deltaX(0), deltaY(0), deltaZ(0),
+        deltaPan(0), deltaTilt(0), deltaRoll(0),
+        translationMag(0), rotationMag(0),
+        withinTransTolerance(false), withinRotTolerance(false), withinTolerance(false) {}
+};
+
+struct DeviationConfig {
+    double transTolerance = 0.005;  
+    double rotTolerance = 0.5;
+
+    int signX = 1;
+    int signY = 1;
+    int signZ = 1;
+    int signPan = 1;
+    int signTilt = 1;
+    int signRoll = 1;
+};
+
+class DeviationCalculator {
+public:
+    DeviationCalculator();
+
+    void setConfig(const DeviationConfig& config);
+
+    /* Calculate deviation between current and golden pose
+        Input: rvec, tvec for both poses (OpenCV format)
+        Output: PoseDeviation with all components
+       Math:
+        R_deviation = R_current * R_golden^(-1)
+        T_deviation = T_current - T_golden
+        Euler angles extracted from R_deviation
+    */
+
+    PoseDeviation calculate(
+        const cv::Vec3d& rvecGolden,
+        const cv::Vec3d& tvecGolden,
+        const cv::Vec3d& rvecCurrent,
+        const cv::Vec3d& tvecCurrent
+    );
+
+    // Convenience: calculate from Eigen format
+    PoseDeviation calculate(
+        const Eigen::Matrix3d& R_golden,
+        const Eigen::Vector3d& T_golden,
+        const Eigen::Matrix3d& R_current,
+        const Eigen::Vector3d& T_current
+    );
+
+    // Extract Euler angles from rotation matrix
+    void rotationToEuler(
+        const Eigen::Matrix3d& R,
+        double& roll,   
+        double& pitch, 
+        double& yaw  
+    );
+
+private:
+    DeviationConfig config_;
+};
+
+// MotorCommand: Suggested motor movements
+
+struct MotorCommand {
+
+    double moveX = 0;
+    double moveZ = 0;
+
+    double rotatePan = 0; 
+    double rotateTilt = 0;
+    int priority = 0;
+    // Priority: 0 = no movement, 1 = translation, 2 = rotation, 3 = both
+};
+
+MotorCommand deviationToMotorCommand(
+    const PoseDeviation& dev,
+    double stepsPerMm = 860.0   // Stepper motor steps/mm
+);
+
+#endif

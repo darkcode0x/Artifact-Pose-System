@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Local env and runtime artifacts for device agent
+.env
+mqtt_events.jsonl
+data/pictures/
+
+# Temporary files
+*.log
+*.tmp
+*.bak
+.DS_Store
