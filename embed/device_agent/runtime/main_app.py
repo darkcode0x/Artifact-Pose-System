@@ -208,8 +208,6 @@ class MainApp:
     def __init__(
         self,
         config: AppConfig,
-        use_mock_hardware: bool = True,
-        use_mock_camera: bool = False,
     ) -> None:
         self.config = config
         self.api_client = APIClient(
@@ -220,8 +218,8 @@ class MainApp:
         )
         self._resolve_device_id()
 
-        self.hardware = HardwareController(use_mock=use_mock_hardware)
-        self.camera = CameraManager(output_dir=config.image_dir, use_mock=use_mock_camera)
+        self.hardware = HardwareController()
+        self.camera = CameraManager(output_dir=config.image_dir)
         self._processed_task_ids = ExpiringTaskIdStore(
             ttl_sec=self.config.task_id_ttl_sec,
             max_entries=self.config.task_id_cache_max_entries,
@@ -752,5 +750,5 @@ class MainApp:
 
 
 if __name__ == "__main__":
-    app = MainApp(AppConfig(), use_mock_hardware=True, use_mock_camera=False)
+    app = MainApp(AppConfig())
     app.run()

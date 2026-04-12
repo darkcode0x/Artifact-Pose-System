@@ -8,17 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-# PNG 1x1 hop le de co the mo/xem duoc trong che do mock
-MOCK_PNG_1X1 = (
-    b"\x89PNG\r\n\x1a\n"
-    b"\x00\x00\x00\rIHDR"
-    b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00"
-    b"\x90wS\xde"
-    b"\x00\x00\x00\x0cIDATx\x9cc``\xf8\xcf\x00\x00\x03\x01\x01\x00"
-    b"\x18\xdd\x8d\xdb"
-    b"\x00\x00\x00\x00IEND\xaeB`\x82"
-)
-
 
 @dataclass
 class CaptureOutcome:
@@ -29,12 +18,9 @@ class CaptureOutcome:
 class CameraManager:
     """Dieu khien viec chup anh 12MP voi cau hinh AF/AWB/AEC thu cong."""
 
-    def __init__(self, output_dir: Path, use_mock: bool = False) -> None:
+    def __init__(self, output_dir: Path) -> None:
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.use_mock = use_mock
-        if self.use_mock:
-            print("[CAM] Dang o che do MOCK, anh tao ra chi de test workflow")
 
     def capture_high_quality(
         self,
@@ -75,26 +61,6 @@ class CameraManager:
     ) -> Optional[CaptureOutcome]:
         """Chup anh chat luong cao 12MP va tra metadata runtime camera."""
         image_path = self.output_dir / f"{basename}.png"
-
-        if self.use_mock:
-            total_delay = max(0.0, pre_set_controls_delay_sec) + max(
-                0.0, pre_capture_request_delay_sec
-            )
-            time.sleep(total_delay)
-            image_path.write_bytes(MOCK_PNG_1X1)
-            print(f"[CAM] Mock capture -> {image_path}")
-            return CaptureOutcome(
-                image_path=image_path,
-                metadata={
-                    "autofocus_lens_position": float(lens_position),
-                    "applied_lens_position": float(lens_position),
-                    "configured_lens_position": float(lens_position),
-                    "analogue_gain": float(gain),
-                    "exposure_time": int(shutter),
-                    "awb_gains": [float(awbgains[0]), float(awbgains[1])],
-                    "mock": True,
-                },
-            )
 
         try:
             picamera2_module = importlib.import_module("picamera2")

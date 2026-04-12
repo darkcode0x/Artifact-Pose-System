@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import FileResponse
 
 from app.api.dependencies import get_container
 from app.schemas.workflow import (
@@ -17,8 +15,6 @@ from app.schemas.workflow import (
 from app.services.state import AppContainer
 
 router = APIRouter()
-_SERVER_ROOT = Path(__file__).resolve().parents[3]
-_WEB_CLIENT_HTML = _SERVER_ROOT / "web_ui" / "index.html"
 
 
 def _extract_lens_from_metadata(latest_metadata: dict[str, Any]) -> float | None:
@@ -179,8 +175,3 @@ def latest_capture_metadata(
 ) -> LatestCaptureMetadataResponse:
     metadata = container.command_service.get_latest_capture_metadata(device_id)
     return LatestCaptureMetadataResponse(ok=True, device_id=device_id, metadata=metadata)
-
-
-@router.get("/web-client")
-def web_client() -> FileResponse:
-    return FileResponse(_WEB_CLIENT_HTML)

@@ -78,6 +78,7 @@ embed/device_agent/mqtt_events.jsonl
 embed/device_agent/data/pictures/
 server/device_registry.json
 server/data/device_registry.json
+server/data/
 
 # Mobile app generated/dependency artifacts (Flutter)
 client/artifact_app/.dart_tool/

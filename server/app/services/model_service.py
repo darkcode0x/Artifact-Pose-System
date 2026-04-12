@@ -32,25 +32,6 @@ class BaseRuntimeModel:
         raise NotImplementedError
 
 
-class MockRuntimeModel(BaseRuntimeModel):
-    def __init__(self, labels: list[str] | None = None) -> None:
-        self._labels = labels or ["normal", "warning", "anomaly"]
-
-    def predict(self, input_data: Any) -> Any:
-        arr = np.asarray(input_data, dtype=float)
-        if arr.size == 0:
-            score = 0.0
-        else:
-            score = float(np.clip(arr.mean(), 0.0, 1.0))
-
-        index = min(int(score * len(self._labels)), len(self._labels) - 1)
-        return {
-            "score": score,
-            "label": self._labels[index],
-            "backend": "mock",
-        }
-
-
 class OnnxRuntimeModel(BaseRuntimeModel):
     def __init__(self, model_path: Path) -> None:
         try:
@@ -139,7 +120,7 @@ class ModelService:
         if runtime_backend == "auto":
             runtime_backend = self._detect_backend(model_path)
 
-        runtime_model = self._build_runtime_model(runtime_backend, model_path, labels)
+        runtime_model = self._build_runtime_model(runtime_backend, model_path)
 
         loaded = LoadedModel(
             name=name,
@@ -172,7 +153,7 @@ class ModelService:
     @staticmethod
     def _detect_backend(model_path: Path | None) -> str:
         if model_path is None:
-            return "mock"
+            raise ValueError("Model path is required when backend is 'auto'")
 
         suffix = model_path.suffix.lower()
         if suffix == ".onnx":
@@ -180,17 +161,16 @@ class ModelService:
         if suffix in {".pt", ".pth"}:
             return "torchscript"
 
-        return "mock"
+        raise ValueError(
+            "Can not detect backend from model extension. "
+            "Use .onnx, .pt, or .pth, or set backend explicitly."
+        )
 
     def _build_runtime_model(
         self,
         backend: str,
         model_path: Path | None,
-        labels: list[str] | None,
     ) -> BaseRuntimeModel:
-        if backend == "mock":
-            return MockRuntimeModel(labels)
-
         if model_path is None:
             raise ValueError("Model path is required for backend '%s'" % backend)
 

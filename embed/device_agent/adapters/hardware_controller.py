@@ -38,11 +38,9 @@ class HardwareController:
         self,
         servo_config: Optional[ServoConfig] = None,
         slider_config: Optional[SliderConfig] = None,
-        use_mock: bool = False,
     ) -> None:
         self.servo_config = servo_config or ServoConfig()
         self.slider_config = slider_config or SliderConfig()
-        self.use_mock = use_mock
 
         self.current_yaw: float = 0.0
         self.current_pitch: float = 0.0
@@ -52,9 +50,8 @@ class HardwareController:
         self._kit = None
         self._gpio = None
 
-        if not self.use_mock:
-            self._init_servo_driver()
-            self._init_stepper_driver()
+        self._init_servo_driver()
+        self._init_stepper_driver()
 
     def _init_servo_driver(self) -> None:
         """Khoi tao PCA9685 qua ServoKit."""
@@ -88,12 +85,6 @@ class HardwareController:
 
     def set_pan_tilt(self, yaw_deg: float, pitch_deg: float) -> None:
         """Dat goc Yaw/Pitch theo do."""
-        if self.use_mock:
-            self.current_yaw = yaw_deg
-            self.current_pitch = pitch_deg
-            print(f"[HW-MOCK] set_pan_tilt yaw={yaw_deg:.2f}, pitch={pitch_deg:.2f}")
-            return
-
         if self._kit is None:
             raise RuntimeError("PCA9685 chua duoc khoi tao")
 
@@ -185,12 +176,6 @@ class HardwareController:
         )
         if effective_pulse_delay <= 0:
             effective_pulse_delay = self.slider_config.pulse_delay
-
-        if self.use_mock:
-            print(
-                f"[HW-MOCK] stepper pin={pul_pin}, dir={direction}, steps={steps}, pulse_delay={effective_pulse_delay}"
-            )
-            return
 
         if self._gpio is None:
             raise RuntimeError("GPIO chua duoc khoi tao")

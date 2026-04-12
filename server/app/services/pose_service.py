@@ -61,6 +61,9 @@ class PoseService:
         if K is None:
             raise RuntimeError(f"Camera params not found: {self._settings.artifact_camera_params}")
 
+        if not self._settings.artifact_golden_pose.exists():
+            raise RuntimeError(f"Golden pose not found: {self._settings.artifact_golden_pose}")
+
         golden_pose = pose_common.load_golden_pose(str(self._settings.artifact_golden_pose))
         if golden_pose is None:
             raise RuntimeError(f"Golden pose not found: {self._settings.artifact_golden_pose}")
