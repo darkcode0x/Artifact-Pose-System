@@ -75,6 +75,37 @@ pip install onnxruntime
 pip install torch
 ```
 
+## Deploy local voi Docker (server + PostgreSQL + MQTT)
+
+File da duoc them:
+
+- `server/Dockerfile`
+- `server/docker-compose.yml`
+- `server/env.docker.example`
+
+Chay stack local:
+
+```bash
+cd server
+cp env.docker.example .env.docker
+docker compose --env-file .env.docker up -d --build
+```
+
+Kiem tra nhanh:
+
+```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/mqtt/health
+```
+
+Neu can reset data DB local:
+
+```bash
+cd server
+docker compose down -v
+docker compose --env-file .env.docker up -d --build
+```
+
 ## Cau hinh
 
 1. Tao file `.env` tu `.env.example`
@@ -117,6 +148,12 @@ uvicorn run:app --host 0.0.0.0 --port 8000 --reload
 Swagger UI:
 
 - `http://127.0.0.1:8000/docs`
+
+Khi chay khong dung Docker va su dung PostgreSQL local, dat trong `.env`:
+
+```env
+AUTH_DATABASE_URL=postgresql+psycopg://artifact:artifact123@127.0.0.1:5432/artifact_auth
+```
 
 ## Nhom endpoint
 
@@ -184,6 +221,47 @@ Neu bat `RUN_AI_ON_UPLOAD=true`, metadata can co:
 - Vi tri khuyen nghi trong repo: `embed/device_agent`
 - Cac endpoint can thiet da duoc giu nguyen de tranh sua client
 - Luong command uu tien MQTT; neu MQTT loi se fallback qua HTTP queue
+
+## Kiem tra nhanh luong API + MQTT
+
+Smoke test tu dong (API + MQTT + ACK) bang 1 lenh:
+
+```bash
+SMOKE_PI_PASSWORD='Pi!@#123' python3 server/tools/smoke_test_api_mqtt_ack.py
+```
+
+Mac dinh script se SSH vao Raspberry (`pi@100.83.253.100`), bat agent tam thoi, publish command, doi ACK va tra ket qua pass/fail.
+
+Co the bo qua buoc SSH neu agent da chay san:
+
+```bash
+python3 server/tools/smoke_test_api_mqtt_ack.py --no-remote-agent --device-id dev-xxxx
+```
+
+1. Tao/lay device id:
+
+```bash
+curl -X POST http://127.0.0.1:8000/devices/get_device_id \
+  -H 'Content-Type: application/json' \
+  -d '{"machine_hash":"md5-demo-001","preferred_device_id":"pi-demo"}'
+```
+
+2. Day lenh move:
+
+```bash
+curl -X POST http://127.0.0.1:8000/devices/pi-demo/queue_move \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"move","yaw_delta":1.5,"pitch_delta":-1.0,"x_steps":10,"z_steps":0,"x_dir":1,"z_dir":1}'
+```
+
+3. Theo doi bridge MQTT:
+
+```bash
+curl http://127.0.0.1:8000/mqtt/health
+curl 'http://127.0.0.1:8000/mqtt/events?limit=20'
+curl http://127.0.0.1:8000/devices/pi-demo/acks
+curl http://127.0.0.1:8000/devices/pi-demo/status
+```
 
 ## Mo rong tiep
 

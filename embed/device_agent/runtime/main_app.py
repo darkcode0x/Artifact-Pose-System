@@ -479,10 +479,10 @@ class MainApp:
 
     def _handle_compound_move(self, command: Dict[str, Any]) -> None:
         # Ho tro schema server gui bo tham so tong hop sau khi tinh pose tren server.
-        yaw_target = float(command.get("yaw_deg", self.hardware.current_yaw))
-        pitch_target = float(command.get("pitch_deg", self.hardware.current_pitch))
-        yaw_target += float(command.get("yaw_delta", 0.0))
-        pitch_target += float(command.get("pitch_delta", 0.0))
+        yaw_target = self._safe_float(command.get("yaw_deg"), self.hardware.current_yaw)
+        pitch_target = self._safe_float(command.get("pitch_deg"), self.hardware.current_pitch)
+        yaw_target += self._safe_float(command.get("yaw_delta"), 0.0)
+        pitch_target += self._safe_float(command.get("pitch_delta"), 0.0)
         x_steps = abs(int(command.get("x_steps", 0)))
         z_steps = abs(int(command.get("z_steps", 0)))
         x_dir = int(command.get("x_dir", 1))
@@ -495,9 +495,15 @@ class MainApp:
                     continue
                 axis = str(step.get("axis", "")).lower()
                 if axis == "pan":
-                    yaw_target += float(step.get("delta", step.get("value", 0.0)))
+                    yaw_target += self._safe_float(
+                        step.get("delta", step.get("value", 0.0)),
+                        0.0,
+                    )
                 elif axis == "tilt":
-                    pitch_target += float(step.get("delta", step.get("value", 0.0)))
+                    pitch_target += self._safe_float(
+                        step.get("delta", step.get("value", 0.0)),
+                        0.0,
+                    )
                 elif axis in {"slider_x", "x"}:
                     delta = int(step.get("steps", step.get("delta", step.get("value", 0))))
                     x_steps += abs(delta)
@@ -529,6 +535,15 @@ class MainApp:
             capture_spec = capture_after_move if isinstance(capture_after_move, dict) else {}
             capture_command = self._build_capture_after_move_command(command, capture_spec)
             self._handle_capture(capture_command)
+
+    @staticmethod
+    def _safe_float(value: Any, default: float) -> float:
+        if value is None:
+            return float(default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
 
     def _run_parallel_motion(
         self,

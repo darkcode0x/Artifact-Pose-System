@@ -3,6 +3,7 @@
 .venv311/
 venv/
 env/
+.venv_test/
 
 # Python cache and bytecode
 __pycache__/
@@ -70,9 +71,13 @@ server/native/third_party/g2o/install/
 
 # Runtime artifacts
 server/uploads/
+server/data/uploads/
+server/data/logs/
+server/data/*.db
 embed/device_agent/mqtt_events.jsonl
 embed/device_agent/data/pictures/
 server/device_registry.json
+server/data/device_registry.json
 
 # Mobile app generated/dependency artifacts (Flutter)
 client/artifact_app/.dart_tool/

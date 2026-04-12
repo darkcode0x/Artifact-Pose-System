@@ -1,26 +1,34 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
 import '../models/login_response.dart';
+import 'api_config.dart';
 
 class AuthService {
 
   static Future<LoginResponse> login(
       String username, String password) async {
+    final response = await http.post(
+      ApiConfig.uri('/api/v1/auth/login'),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'username': username,
+        'password': password,
+      }),
+    );
 
-    await Future.delayed(const Duration(seconds: 1));
-
-    if (username == "admin" && password == "123456") {
-      return LoginResponse(
-        accessToken: "fake_admin_token",
-        role: "admin",
-      );
+    if (response.statusCode != 200) {
+      throw Exception('Login failed: ${response.statusCode}');
     }
 
-    if (username == "user" && password == "123456") {
-      return LoginResponse(
-        accessToken: "fake_user_token",
-        role: "user",
-      );
+    final body = jsonDecode(response.body);
+    if (body is! Map<String, dynamic>) {
+      throw Exception('Invalid login response format');
     }
 
-    throw Exception("Invalid credentials");
+    return LoginResponse.fromJson(body);
   }
 }

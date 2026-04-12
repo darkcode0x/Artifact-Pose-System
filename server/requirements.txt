@@ -5,5 +5,7 @@ paho-mqtt>=1.6.1
 numpy>=1.24.0
 opencv-contrib-python>=4.8.0
 sqlalchemy>=2.0.0
+psycopg[binary]>=3.1.18
 passlib[bcrypt]>=1.7.4
+bcrypt<4.1
 python-jose[cryptography]>=3.3.0
