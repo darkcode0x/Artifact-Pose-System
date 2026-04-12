@@ -14,7 +14,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict
 
-from connectors.api_client import APIClient, APIConfig
+from api_client import APIClient, APIConfig
 from adapters.camera_manager import CameraManager
 from adapters.hardware_controller import HardwareController
 
@@ -165,6 +165,12 @@ class AppConfig:
     mqtt_status_topic_template: str = field(
         default_factory=lambda: _env_str("MQTT_STATUS_TOPIC_TEMPLATE", "status/{device_id}")
     )
+    mqtt_reconnect_initial_delay_sec: float = field(
+        default_factory=lambda: _env_float("MQTT_RECONNECT_INITIAL_DELAY_SEC", 2.0)
+    )
+    mqtt_reconnect_max_delay_sec: float = field(
+        default_factory=lambda: _env_float("MQTT_RECONNECT_MAX_DELAY_SEC", 30.0)
+    )
     task_id_ttl_sec: int = field(default_factory=lambda: _env_int("TASK_ID_TTL_SEC", 180)) #ttl = 3 phut de tranh nhan lenh trung lap
     task_id_cache_max_entries: int = field(
         default_factory=lambda: _env_int("TASK_ID_CACHE_MAX_ENTRIES", 50000)
@@ -210,6 +216,7 @@ class MainApp:
         config: AppConfig,
     ) -> None:
         self.config = config
+        self._machine_hash = self._compute_machine_hash()
         self.api_client = APIClient(
             APIConfig(
                 base_url=config.server_base_url,
@@ -234,19 +241,21 @@ class MainApp:
             ) from exc
 
         self._mqtt_module = mqtt_client
+        self._mqtt_client = self._build_mqtt_client()
 
-        self._mqtt_client = mqtt_client.Client(client_id=f"pi-node-{self.config.device_id}")
+    def _build_mqtt_client(self) -> Any:
+        client = self._mqtt_module.Client(client_id=f"pi-node-{self.config.device_id}")
         if self.config.mqtt_username:
-            self._mqtt_client.username_pw_set(
+            client.username_pw_set(
                 username=self.config.mqtt_username,
                 password=self.config.mqtt_password or None,
             )
 
-        self._mqtt_client.on_connect = self._on_mqtt_connect
-        self._mqtt_client.on_message = self._on_mqtt_message
-        self._mqtt_client.on_disconnect = self._on_mqtt_disconnect
+        client.on_connect = self._on_mqtt_connect
+        client.on_message = self._on_mqtt_message
+        client.on_disconnect = self._on_mqtt_disconnect
 
-        self._mqtt_client.will_set(
+        client.will_set(
             self._status_topic,
             payload=json.dumps(
                 {
@@ -258,6 +267,7 @@ class MainApp:
             qos=self.config.mqtt_qos,
             retain=True,
         )
+        return client
 
     def _resolve_device_id(self) -> None:
         """Dang ky/thiet lap device_id duy nhat voi server truoc khi vao MQTT loop."""
@@ -268,11 +278,10 @@ class MainApp:
             self.api_client.config.device_id = self.config.device_id
             return
 
-        machine_hash = self._compute_machine_hash()
         preferred_id = self.config.device_id.strip() or None
 
         server_device_id = self.api_client.get_device_id(
-            machine_hash=machine_hash,
+            machine_hash=self._machine_hash,
             preferred_device_id=preferred_id,
         )
 
@@ -281,10 +290,35 @@ class MainApp:
             print(f"[APP] Nhan device_id tu server: {self.config.device_id}")
         else:
             # Fallback: dung chinh machine hash lam device_id duy nhat.
-            self.config.device_id = machine_hash
+            self.config.device_id = self._machine_hash
             print(f"[APP] Khong lay duoc id tu server, fallback: {self.config.device_id}")
 
         self.api_client.config.device_id = self.config.device_id
+
+    def _refresh_device_id_from_server(self) -> bool:
+        """Thu lay lai device_id tu server trong qua trinh reconnect."""
+        if not self.config.use_server_device_id:
+            return False
+
+        preferred_id = self.config.device_id.strip() or None
+        server_device_id = self.api_client.get_device_id(
+            machine_hash=self._machine_hash,
+            preferred_device_id=preferred_id,
+        )
+        if not server_device_id:
+            return False
+
+        if server_device_id == self.config.device_id:
+            return False
+
+        old_device_id = self.config.device_id
+        self.config.device_id = server_device_id
+        self.api_client.config.device_id = server_device_id
+        self._mqtt_client = self._build_mqtt_client()
+        print(
+            f"[APP] Cap nhat device_id tu server: {old_device_id} -> {self.config.device_id}"
+        )
+        return True
 
     @staticmethod
     def _compute_machine_hash() -> str:
@@ -342,7 +376,10 @@ class MainApp:
         self._publish_status("online")
 
     def _on_mqtt_disconnect(self, client: Any, userdata: Any, rc: int) -> None:
-        print(f"[MQTT] Mat ket noi broker, rc={rc}")
+        if rc == 0:
+            print("[MQTT] Da ngat ket noi chu dong")
+            return
+        print(f"[MQTT] Mat ket noi broker, rc={rc}, se thu reconnect")
 
     def _on_mqtt_message(self, client: Any, userdata: Any, msg: Any) -> None:
         try:
@@ -730,14 +767,31 @@ class MainApp:
             print("[APP] Upload inspection that bai")
 
     def run(self) -> None:
-        """Main loop: ket noi MQTT va nhan lenh push tu server."""
+        """Main loop: ket noi MQTT va tu dong reconnect khi co su co mang/server."""
+        initial_delay = max(1.0, self.config.mqtt_reconnect_initial_delay_sec)
+        max_delay = max(initial_delay, self.config.mqtt_reconnect_max_delay_sec)
+        reconnect_delay = initial_delay
+
         try:
-            self._mqtt_client.connect(
-                host=self.config.mqtt_host,
-                port=self.config.mqtt_port,
-                keepalive=self.config.mqtt_keepalive_sec,
-            )
-            self._mqtt_client.loop_forever()
+            while True:
+                self._refresh_device_id_from_server()
+                try:
+                    self._mqtt_client.connect(
+                        host=self.config.mqtt_host,
+                        port=self.config.mqtt_port,
+                        keepalive=self.config.mqtt_keepalive_sec,
+                    )
+                    reconnect_delay = initial_delay
+                    self._mqtt_client.loop_forever()
+                    print("[MQTT] Vong loop ket thuc, chuan bi reconnect")
+                except KeyboardInterrupt:
+                    raise
+                except Exception as exc:
+                    print(f"[MQTT] Loi ket noi/loop: {exc}")
+
+                print(f"[MQTT] Thu ket noi lai sau {reconnect_delay:.1f}s")
+                time.sleep(reconnect_delay)
+                reconnect_delay = min(max_delay, reconnect_delay * 2.0)
         except KeyboardInterrupt:
             print("[APP] Dung chuong trinh")
         finally:
