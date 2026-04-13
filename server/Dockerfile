@@ -18,6 +18,7 @@ WORKDIR /build
 COPY native/pose_solver_cpp/ ./pose_solver_cpp/
 
 RUN cd pose_solver_cpp \
+    && rm -rf build \
     && mkdir -p build && cd build \
     && cmake .. \
     && make -j"$(nproc)"
