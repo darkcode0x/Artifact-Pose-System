@@ -1,3 +1,30 @@
+###############################################################################
+# Stage 1: Build C++ pose_solver_cpp voi libs cua container
+###############################################################################
+FROM python:3.10-slim AS cpp-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake pkg-config \
+        libopencv-dev \
+        libeigen3-dev \
+        libg2o-dev \
+        libsuitesparse-dev \
+        python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install pybind11[global]
+
+WORKDIR /build
+COPY native/pose_solver_cpp/ ./pose_solver_cpp/
+
+RUN cd pose_solver_cpp \
+    && mkdir -p build && cd build \
+    && cmake .. \
+    && make -j"$(nproc)"
+
+###############################################################################
+# Stage 2: Runtime
+###############################################################################
 FROM python:3.10-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -8,17 +35,18 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential libgl1 libglib2.0-0 \
+        libgl1 libglib2.0-0 \
+        libopencv-dev libg2o-dev libsuitesparse-dev \
     && rm -rf /var/lib/apt/lists/*
-
-# Copy native shared libs (opencv_world 4.10, g2o 0.2) tu may build
-COPY native/libs/ /usr/local/lib/
-RUN ldconfig
 
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
 COPY . .
+
+# Copy .so tu builder stage — link voi dung libs cua container
+COPY --from=cpp-builder /build/pose_solver_cpp/build/pose_solver_cpp*.so \
+    /app/app/modules/artifact_pose/
 
 EXPOSE 8000
 

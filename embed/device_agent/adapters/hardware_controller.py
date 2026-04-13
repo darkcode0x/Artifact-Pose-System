@@ -11,12 +11,12 @@ from typing import Optional
 class ServoConfig:
     """Cau hinh servo cho PCA9685."""
 
-    pan_channel: int = 1
-    tilt_channel: int = 0
+    pan_channel: int = 0
+    tilt_channel: int = 1
     pan_min: int = 0
-    pan_max: int = 100
+    pan_max: int = 180
     tilt_min: int = 0
-    tilt_max: int = 110
+    tilt_max: int = 120
 
 
 @dataclass
@@ -42,8 +42,8 @@ class HardwareController:
         self.servo_config = servo_config or ServoConfig()
         self.slider_config = slider_config or SliderConfig()
 
-        self.current_yaw: int = 0
-        self.current_pitch: int = 0
+        self.current_yaw: int = 110
+        self.current_pitch: int = 50
         self.current_x_steps: int = 0
         self.current_z_steps: int = 0
 
