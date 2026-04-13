@@ -7,7 +7,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential libgl1 libglib2.0-0 \
+    && apt-get install -y --no-install-recommends \
+        build-essential libgl1 libglib2.0-0 \
+        libopencv-dev libg2o-dev libsuitesparse-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./

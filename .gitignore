@@ -47,7 +47,6 @@ Thumbs.db
 # Native/CMake build artifacts
 *.o
 *.obj
-*.so
 *.dll
 *.dylib
 *.a
