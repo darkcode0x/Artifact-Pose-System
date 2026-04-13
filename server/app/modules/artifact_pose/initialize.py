@@ -8,10 +8,11 @@ import numpy as np
 
 from .common import (
     DATA_DIR,
-    DIAMOND_OBJ_PTS,
+    DEFAULT_REFERENCE_DEPTH,
     HAS_CPP,
+    MIN_REFERENCE_POINTS,
     STEREO_BASELINE,
-    detect_diamond,
+    build_reference_points_from_image_points,
     extract_orb,
     pose_solver_cpp,
     save_golden_pose,
@@ -27,6 +28,14 @@ def match_and_triangulate(
     D: Any,
     baseline: float,
 ) -> tuple[Any, Any, Any, Any]:
+    if (
+        desc_left is None
+        or desc_right is None
+        or len(desc_left) == 0
+        or len(desc_right) == 0
+    ):
+        return None, None, None, None
+
     pts_left_arr = np.array([[kp.pt[0], kp.pt[1]] for kp in kp_left], dtype=np.float64)
     pts_right_arr = np.array([[kp.pt[0], kp.pt[1]] for kp in kp_right], dtype=np.float64)
 
@@ -93,17 +102,23 @@ def match_and_triangulate(
     return pts3d[mask], pts_l[mask], m_desc[mask], None
 
 
+def _pick_strongest_indices(keypoints: list[Any], max_points: int) -> Any:
+    if len(keypoints) <= max_points:
+        return np.arange(len(keypoints), dtype=np.int32)
+
+    scored = np.array([float(kp.response) for kp in keypoints], dtype=np.float64)
+    indices = np.argsort(scored)[::-1][:max_points]
+    return np.sort(indices.astype(np.int32))
+
+
 def run_initialization(
     image_left: Any,
     image_right: Any,
     K: Any,
     D: Any,
     output_pose_path: str | Path | None = None,
+    artifact_id: str | None = None,
 ) -> dict[str, Any] | None:
-    diamond = detect_diamond(image_left, K, D)
-    if diamond is None:
-        return None
-
     kp_left, desc_left, _ = extract_orb(image_left)
     kp_right, desc_right, _ = extract_orb(image_right)
 
@@ -117,45 +132,102 @@ def run_initialization(
         STEREO_BASELINE,
     )
 
-    if pts3d is None or len(pts3d) < 10:
+    if pts3d is None or len(pts3d) < MIN_REFERENCE_POINTS:
         return None
 
-    diamond_2d_undist = cv2.undistortPoints(
-        diamond["corners"].reshape(-1, 1, 2).astype(np.float64), K, D, P=K
-    ).reshape(-1, 2)
-    _, rvec_pinhole, tvec_pinhole = cv2.solvePnP(
-        DIAMOND_OBJ_PTS.astype(np.float64),
-        diamond_2d_undist,
-        K,
-        None,
-    )
-
-    rvec_pinhole = rvec_pinhole.ravel()
-    tvec_pinhole = tvec_pinhole.ravel()
-
-    R_mat, _ = cv2.Rodrigues(rvec_pinhole)
-    tvec_col = tvec_pinhole.reshape(3, 1)
-    pts3d_world = (R_mat.T @ (pts3d.T - tvec_col)).T
-
-    diamond["rvec"] = rvec_pinhole
-    diamond["tvec"] = tvec_pinhole
+    # Use left-camera frame of the sampled stereo pair as reference frame.
+    rvec_ref = np.zeros(3, dtype=np.float64)
+    tvec_ref = np.zeros(3, dtype=np.float64)
 
     output_path = Path(output_pose_path) if output_pose_path is not None else DATA_DIR / "golden_pose.yaml"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     save_golden_pose(
         output_path,
-        diamond,
-        pts3d_world,
+        rvec_ref,
+        tvec_ref,
+        pts3d,
         pts2d,
         matched_desc,
         (image_left.shape[1], image_left.shape[0]),
         STEREO_BASELINE,
+        method="quadtree_stereo_g2o",
+        artifact_id=artifact_id,
+        reference_depth=DEFAULT_REFERENCE_DEPTH,
     )
 
     return {
-        "diamond": diamond,
-        "points_3d": pts3d_world,
+        "reference_pose": {
+            "rvec": rvec_ref,
+            "tvec": tvec_ref,
+        },
+        "points_3d": pts3d,
         "points_2d": pts2d,
         "descriptors": matched_desc,
+        "num_points": int(len(pts3d)),
+        "method": "quadtree_stereo_g2o",
+        "artifact_id": artifact_id,
+        "pose_file": str(output_path),
+    }
+
+
+def run_initialization_from_sample(
+    image: Any,
+    K: Any,
+    D: Any,
+    output_pose_path: str | Path | None = None,
+    artifact_id: str | None = None,
+    reference_depth: float = DEFAULT_REFERENCE_DEPTH,
+    max_points: int = 2500,
+) -> dict[str, Any] | None:
+    keypoints, descriptors, keypoint_xy = extract_orb(image)
+    if len(keypoints) < MIN_REFERENCE_POINTS or len(descriptors) < MIN_REFERENCE_POINTS:
+        return None
+
+    points_3d, points_2d = build_reference_points_from_image_points(
+        keypoint_xy,
+        K,
+        D,
+        reference_depth=reference_depth,
+    )
+    if len(points_3d) < MIN_REFERENCE_POINTS:
+        return None
+
+    keep_indices = _pick_strongest_indices(keypoints, max_points)
+    points_3d = points_3d[keep_indices]
+    points_2d = points_2d[keep_indices]
+    descriptors = descriptors[keep_indices]
+
+    rvec_ref = np.zeros(3, dtype=np.float64)
+    tvec_ref = np.zeros(3, dtype=np.float64)
+
+    output_path = Path(output_pose_path) if output_pose_path is not None else DATA_DIR / "golden_pose.yaml"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    save_golden_pose(
+        output_path,
+        rvec_ref,
+        tvec_ref,
+        points_3d,
+        points_2d,
+        descriptors,
+        (image.shape[1], image.shape[0]),
+        baseline=0.0,
+        method="quadtree_mono_g2o",
+        artifact_id=artifact_id,
+        reference_depth=reference_depth,
+    )
+
+    return {
+        "reference_pose": {
+            "rvec": rvec_ref,
+            "tvec": tvec_ref,
+        },
+        "points_3d": points_3d,
+        "points_2d": points_2d,
+        "descriptors": descriptors,
+        "num_points": int(len(points_3d)),
+        "method": "quadtree_mono_g2o",
+        "artifact_id": artifact_id,
+        "pose_file": str(output_path),
     }

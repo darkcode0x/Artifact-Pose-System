@@ -18,6 +18,7 @@ class InspectionUploadResponse(BaseModel):
     message: str
     saved_file: str
     size_bytes: int
+    sample_init_result: dict[str, Any] | None = None
     pose_result: dict[str, Any] | None = None
     correction_dispatch: dict[str, Any] | None = None
     ai_result: dict[str, Any] | None = None

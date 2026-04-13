@@ -34,6 +34,7 @@ class InspectionService:
         capture_payload = self._extract_capture_payload(metadata)
         device_id = self._extract_device_id(metadata, capture_payload)
         artifact_id = self._extract_artifact_id(metadata, capture_payload)
+        capture_job = str(capture_payload.get("capture_job", "alignment")).strip().lower()
 
         target_path, size_bytes = await self._save_file(file)
 
@@ -45,11 +46,22 @@ class InspectionService:
                 source_metadata=metadata,
             )
 
+        sample_init_result: dict[str, Any] | None = None
+        if capture_job == "golden_sample":
+            try:
+                sample_init_result = self._pose_service.initialize_from_sample(target_path, artifact_id)
+            except Exception as exc:
+                sample_init_result = {
+                    "ok": False,
+                    "artifact_id": artifact_id,
+                    "error": str(exc),
+                }
+
         pose_result: dict[str, Any] | None = None
         correction_dispatch: dict[str, Any] | None = None
-        if self._settings.run_pose_on_upload:
+        if self._settings.run_pose_on_upload and capture_job != "golden_sample":
             try:
-                pose_result = self._pose_service.correct_image(target_path)
+                pose_result = self._pose_service.correct_image(target_path, artifact_id=artifact_id)
             except Exception as exc:
                 pose_result = {
                     "ok": False,
@@ -75,6 +87,8 @@ class InspectionService:
             "metadata": metadata,
             "content_type": file.content_type,
             "size_bytes": size_bytes,
+            "capture_job": capture_job,
+            "sample_init_result": sample_init_result,
             "pose_result": pose_result,
             "correction_dispatch": correction_dispatch,
             "ai_result": ai_result,
@@ -86,6 +100,7 @@ class InspectionService:
             "message": "Upload received",
             "saved_file": str(target_path),
             "size_bytes": size_bytes,
+            "sample_init_result": sample_init_result,
             "pose_result": pose_result,
             "correction_dispatch": correction_dispatch,
             "ai_result": ai_result,

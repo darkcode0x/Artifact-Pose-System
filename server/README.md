@@ -10,7 +10,7 @@ Server nay duoc viet de ket noi voi device_agent va mobile thong qua REST API, d
   - `POST /inspections/upload`
 - Ho tro queue command va publish command qua MQTT
 - Ho tro module nap model AI (mock/onnx/torchscript)
-- Tich hop truc tiep Artifact Pose module trong server de can chinh pose bang G2O
+- Tich hop truc tiep Artifact Pose module trong server de can chinh pose bang QuadTree + G2O
 - Cau truc code de de mo rong va quan ly
 
 ## Kien truc thu muc
@@ -59,7 +59,7 @@ server/
 - Pydantic: validate input/output ro rang
 - paho-mqtt: bridge command/status/ack voi device_agent
 - OpenCV + NumPy: xu ly anh va pose
-- G2O (qua `pose_solver_cpp`): toi uu hybrid pose de tang do chinh xac
+- G2O (qua `pose_solver_cpp`): toi uu pose tren tap keypoint QuadTree ORB
 
 ## Cai dat
 
@@ -176,7 +176,7 @@ AUTH_DATABASE_URL=postgresql+psycopg://artifact:artifact123@127.0.0.1:5432/artif
 
 - `POST /workflows/{device_id}/capture-request`
   - `job_type=alignment`: chup anh cho can chinh
-  - `job_type=golden_sample`: chup mau goc
+  - `job_type=golden_sample`: chup mau goc (server tu tao golden reference theo artifact)
 - `POST /workflows/{device_id}/start-alignment`
   - bat dau vong lap can chinh: chup -> pose -> move -> chup lai
 - `GET /workflows/{device_id}/latest-capture-metadata`
@@ -210,10 +210,20 @@ Neu bat `RUN_AI_ON_UPLOAD=true`, metadata can co:
 
 - `POST /pose/correct` (upload 1 anh)
 - `POST /pose/initialize_golden` (upload left + right)
+- `POST /pose/initialize_from_sample` (upload 1 anh mau cho artifact)
+- `GET /pose/artifacts`
+- `GET /pose/artifacts/{artifact_id}`
+
+Pipeline pose hien tai khong dung Charuco marker. Reference duoc tao tu keypoint QuadTree ORB,
+sau do can chinh dung solvePnP + G2O refine.
 
 ### Web Client
 
 - Mo giao dien test workflow tai: `GET /web-client`
+- Luong khuyen nghi:
+  1. Nhap `device_id`, chon artifact
+  2. Neu artifact chua co sample, bam `Capture Sample Image`
+  3. Khi artifact da co sample, bam `Start Auto Alignment`
 
 ## Tich hop device_agent
 

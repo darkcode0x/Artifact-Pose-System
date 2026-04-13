@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Artifact Auto-Alignment Console</title>
+    <style>
+      :root {
+        --bg: #f4efe6;
+        --surface: rgba(255, 255, 255, 0.78);
+        --surface-strong: rgba(255, 255, 255, 0.92);
+        --text: #221c18;
+        --muted: #5f564d;
+        --accent: #0d9b82;
+        --accent-2: #1877d9;
+        --warn: #c8582a;
+        --ok: #0f8f67;
+        --line: rgba(34, 28, 24, 0.14);
+        --shadow: 0 18px 48px rgba(22, 17, 12, 0.16);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Space Grotesk", "Segoe UI", "Helvetica Neue", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 10% 15%, #ffe9c9 0%, transparent 42%),
+          radial-gradient(circle at 90% 20%, #c7f0ff 0%, transparent 35%),
+          radial-gradient(circle at 80% 90%, #d6ffd9 0%, transparent 30%),
+          linear-gradient(140deg, #f5efe6 0%, #e9f0f8 46%, #f8efe8 100%);
+        min-height: 100vh;
+      }
+
+      .shell {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 28px 20px 36px;
+      }
+
+      .hero {
+        padding: 28px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: linear-gradient(130deg, rgba(255, 255, 255, 0.85), rgba(255, 250, 240, 0.78));
+        box-shadow: var(--shadow);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.6rem, 4vw, 2.5rem);
+        letter-spacing: 0.02em;
+      }
+
+      .sub {
+        margin-top: 10px;
+        color: var(--muted);
+        max-width: 760px;
+        line-height: 1.5;
+      }
+
+      .grid {
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 16px;
+        box-shadow: 0 10px 28px rgba(22, 17, 12, 0.08);
+        backdrop-filter: blur(4px);
+      }
+
+      .col-8 {
+        grid-column: span 8;
+      }
+
+      .col-4 {
+        grid-column: span 4;
+      }
+
+      .col-12 {
+        grid-column: span 12;
+      }
+
+      .row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      label {
+        display: block;
+        font-size: 0.84rem;
+        font-weight: 700;
+        color: var(--muted);
+        margin: 8px 0 6px;
+      }
+
+      input,
+      select,
+      button,
+      textarea {
+        font: inherit;
+      }
+
+      input,
+      select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: var(--surface-strong);
+      }
+
+      button {
+        border: 0;
+        border-radius: 12px;
+        padding: 10px 14px;
+        cursor: pointer;
+        font-weight: 700;
+        color: #fff;
+        transition: transform 120ms ease, filter 120ms ease;
+      }
+
+      button:disabled {
+        filter: grayscale(1);
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      button:hover:not(:disabled) {
+        transform: translateY(-1px);
+        filter: brightness(1.04);
+      }
+
+      .btn-accent {
+        background: linear-gradient(130deg, #0da586, #0c8a89);
+      }
+
+      .btn-primary {
+        background: linear-gradient(130deg, #2584ed, #1462c2);
+      }
+
+      .btn-ghost {
+        background: linear-gradient(130deg, #6f5f54, #4d4138);
+      }
+
+      .btn-warn {
+        background: linear-gradient(130deg, #d56b35, #b44e24);
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 700;
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: 0.8rem;
+      }
+
+      .badge.ok {
+        background: rgba(15, 143, 103, 0.14);
+        color: var(--ok);
+      }
+
+      .badge.warn {
+        background: rgba(200, 88, 42, 0.16);
+        color: var(--warn);
+      }
+
+      .mono {
+        font-family: "IBM Plex Mono", "Consolas", monospace;
+      }
+
+      .kvs {
+        margin-top: 8px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .kv {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        border-bottom: 1px dashed var(--line);
+        padding-bottom: 6px;
+      }
+
+      .kv .k {
+        color: var(--muted);
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 220px;
+        resize: vertical;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: #111;
+        color: #daf7ee;
+        padding: 12px;
+        line-height: 1.35;
+      }
+
+      @media (max-width: 920px) {
+        .col-8,
+        .col-4 {
+          grid-column: span 12;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <h1>Artifact Auto-Alignment Console</h1>
+        <p class="sub">
+          Web workflow thay cho mobile app: chon artifact, chup mau neu artifact chua co golden reference,
+          sau do bam auto-align de chay luong can chinh da implement tren server + device MQTT.
+        </p>
+      </section>
+
+      <section class="grid">
+        <article class="card col-8">
+          <div class="row">
+            <div style="flex: 1 1 300px">
+              <label for="deviceId">Device ID</label>
+              <input id="deviceId" placeholder="dev-xxxx" />
+            </div>
+            <div style="flex: 1 1 240px">
+              <label for="artifactSelect">Artifact</label>
+              <select id="artifactSelect"></select>
+            </div>
+          </div>
+
+          <div class="row" style="margin-top: 10px">
+            <div style="flex: 1 1 260px">
+              <label for="newArtifactId">New Artifact ID (optional)</label>
+              <input id="newArtifactId" placeholder="artifact_bronze_mask" />
+            </div>
+            <div style="display: flex; align-items: end; gap: 8px; flex-wrap: wrap">
+              <button class="btn-ghost" id="btnAddArtifact">Add/Select Artifact</button>
+              <button class="btn-ghost" id="btnRefreshArtifacts">Refresh Artifacts</button>
+            </div>
+          </div>
+
+          <div class="row" style="margin-top: 14px">
+            <button class="btn-warn" id="btnCaptureSample">Capture Sample Image</button>
+            <button class="btn-primary" id="btnStartAlign">Start Auto Alignment</button>
+            <button class="btn-accent" id="btnFetchMeta">Fetch Latest Metadata</button>
+            <button class="btn-ghost" id="btnFetchAck">Fetch ACKs</button>
+          </div>
+        </article>
+
+        <article class="card col-4">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px">
+            <h3 style="margin: 0">Artifact Status</h3>
+            <span id="artifactBadge" class="badge warn">No sample</span>
+          </div>
+          <div class="kvs mono">
+            <div class="kv"><span class="k">artifact_id</span><span id="stArtifact">-</span></div>
+            <div class="kv"><span class="k">pose_file</span><span id="stFile">-</span></div>
+            <div class="kv"><span class="k">method</span><span id="stMethod">-</span></div>
+            <div class="kv"><span class="k">num_points</span><span id="stPoints">0</span></div>
+            <div class="kv"><span class="k">updated_at</span><span id="stUpdated">-</span></div>
+          </div>
+        </article>
+
+        <article class="card col-12">
+          <h3 style="margin: 0 0 10px">Event Log</h3>
+          <textarea id="log" readonly></textarea>
+        </article>
+      </section>
+    </main>
+
+    <script>
+      const state = {
+        artifactMap: new Map(),
+      };
+
+      const deviceIdInput = document.getElementById("deviceId");
+      const artifactSelect = document.getElementById("artifactSelect");
+      const newArtifactInput = document.getElementById("newArtifactId");
+      const artifactBadge = document.getElementById("artifactBadge");
+      const logArea = document.getElementById("log");
+
+      const statusEls = {
+        artifact: document.getElementById("stArtifact"),
+        file: document.getElementById("stFile"),
+        method: document.getElementById("stMethod"),
+        points: document.getElementById("stPoints"),
+        updated: document.getElementById("stUpdated"),
+      };
+
+      const btnCapture = document.getElementById("btnCaptureSample");
+      const btnAlign = document.getElementById("btnStartAlign");
+
+      function logLine(label, payload) {
+        const ts = new Date().toISOString();
+        const body = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+        logArea.value = `[${ts}] ${label}\n${body}\n\n` + logArea.value;
+      }
+
+      async function apiJson(path, options = {}) {
+        const response = await fetch(path, {
+          headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {}),
+          },
+          ...options,
+        });
+        const text = await response.text();
+        let payload = null;
+        try {
+          payload = text ? JSON.parse(text) : null;
+        } catch (_e) {
+          payload = { raw: text };
+        }
+
+        if (!response.ok) {
+          throw new Error(payload?.detail || payload?.error || `HTTP ${response.status}`);
+        }
+
+        return payload;
+      }
+
+      function selectedArtifactId() {
+        const value = artifactSelect.value.trim();
+        return value || "artifact_demo_001";
+      }
+
+      function selectedDeviceId() {
+        const value = deviceIdInput.value.trim();
+        return value;
+      }
+
+      function ensureArtifactOption(artifactId) {
+        if (!artifactId) {
+          return;
+        }
+        const exists = [...artifactSelect.options].some((opt) => opt.value === artifactId);
+        if (!exists) {
+          const opt = document.createElement("option");
+          opt.value = artifactId;
+          opt.textContent = artifactId;
+          artifactSelect.appendChild(opt);
+        }
+      }
+
+      function updateStatusCard(artifact) {
+        if (!artifact) {
+          statusEls.artifact.textContent = "-";
+          statusEls.file.textContent = "-";
+          statusEls.method.textContent = "-";
+          statusEls.points.textContent = "0";
+          statusEls.updated.textContent = "-";
+          artifactBadge.className = "badge warn";
+          artifactBadge.textContent = "No sample";
+          btnAlign.disabled = true;
+          return;
+        }
+
+        statusEls.artifact.textContent = artifact.artifact_id || artifact.safe_artifact_id || "-";
+        statusEls.file.textContent = artifact.pose_file || "-";
+        statusEls.method.textContent = artifact.method || "-";
+        statusEls.points.textContent = String(artifact.num_points || 0);
+        statusEls.updated.textContent = artifact.updated_at || "-";
+
+        if (artifact.exists) {
+          artifactBadge.className = "badge ok";
+          artifactBadge.textContent = "Ready to align";
+          btnAlign.disabled = false;
+          btnCapture.textContent = "Capture New Sample";
+        } else {
+          artifactBadge.className = "badge warn";
+          artifactBadge.textContent = "Sample missing";
+          btnAlign.disabled = true;
+          btnCapture.textContent = "Capture Sample Image";
+        }
+      }
+
+      async function refreshArtifacts(preferredArtifactId = "") {
+        const payload = await apiJson("/pose/artifacts");
+        const artifacts = Array.isArray(payload?.artifacts) ? payload.artifacts : [];
+
+        state.artifactMap.clear();
+        artifactSelect.innerHTML = "";
+
+        if (artifacts.length === 0) {
+          const fallbackId = preferredArtifactId || "artifact_demo_001";
+          ensureArtifactOption(fallbackId);
+          artifactSelect.value = fallbackId;
+          await refreshArtifactStatus();
+          return;
+        }
+
+        for (const artifact of artifacts) {
+          const id = artifact.safe_artifact_id || artifact.artifact_id;
+          if (!id) {
+            continue;
+          }
+          state.artifactMap.set(id, artifact);
+          const opt = document.createElement("option");
+          opt.value = id;
+          opt.textContent = `${id}${artifact.exists ? "" : " (no-sample)"}`;
+          artifactSelect.appendChild(opt);
+        }
+
+        const nextId = preferredArtifactId && state.artifactMap.has(preferredArtifactId)
+          ? preferredArtifactId
+          : artifactSelect.options[0]?.value || "artifact_demo_001";
+        ensureArtifactOption(nextId);
+        artifactSelect.value = nextId;
+        await refreshArtifactStatus();
+      }
+
+      async function refreshArtifactStatus() {
+        const artifactId = selectedArtifactId();
+        if (!artifactId) {
+          updateStatusCard(null);
+          return;
+        }
+
+        try {
+          const payload = await apiJson(`/pose/artifacts/${encodeURIComponent(artifactId)}`);
+          const artifact = payload?.artifact || null;
+          if (artifact) {
+            state.artifactMap.set(artifact.safe_artifact_id || artifactId, artifact);
+          }
+          updateStatusCard(artifact);
+        } catch (error) {
+          updateStatusCard(null);
+          logLine("artifact_status_error", String(error));
+        }
+      }
+
+      async function captureSample() {
+        const deviceId = selectedDeviceId();
+        const artifactId = selectedArtifactId();
+        if (!deviceId) {
+          logLine("validation", "Please input device id before capturing sample.");
+          return;
+        }
+
+        const body = {
+          artifact_id: artifactId,
+          job_type: "golden_sample",
+          use_latest_metadata: true,
+          camera_overrides: {},
+        };
+
+        const payload = await apiJson(
+          `/workflows/${encodeURIComponent(deviceId)}/capture-request`,
+          {
+            method: "POST",
+            body: JSON.stringify(body),
+          }
+        );
+        logLine("capture_sample_requested", payload);
+
+        for (let i = 0; i < 12; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+          await refreshArtifactStatus();
+          const statusPayload = await apiJson(`/pose/artifacts/${encodeURIComponent(artifactId)}`);
+          if (statusPayload?.artifact?.exists) {
+            logLine("sample_ready", statusPayload.artifact);
+            break;
+          }
+        }
+      }
+
+      async function startAlignment() {
+        const deviceId = selectedDeviceId();
+        const artifactId = selectedArtifactId();
+        if (!deviceId) {
+          logLine("validation", "Please input device id before start alignment.");
+          return;
+        }
+
+        const body = {
+          artifact_id: artifactId,
+          use_latest_metadata: true,
+          camera_overrides: {},
+        };
+
+        const payload = await apiJson(
+          `/workflows/${encodeURIComponent(deviceId)}/start-alignment`,
+          {
+            method: "POST",
+            body: JSON.stringify(body),
+          }
+        );
+        logLine("alignment_started", payload);
+      }
+
+      async function fetchLatestMetadata() {
+        const deviceId = selectedDeviceId();
+        if (!deviceId) {
+          logLine("validation", "Please input device id before fetch metadata.");
+          return;
+        }
+
+        const payload = await apiJson(
+          `/workflows/${encodeURIComponent(deviceId)}/latest-capture-metadata`
+        );
+        logLine("latest_capture_metadata", payload);
+      }
+
+      async function fetchAcks() {
+        const deviceId = selectedDeviceId();
+        if (!deviceId) {
+          logLine("validation", "Please input device id before fetch ACK.");
+          return;
+        }
+
+        const payload = await apiJson(`/devices/${encodeURIComponent(deviceId)}/acks?limit=10`);
+        logLine("device_acks", payload);
+      }
+
+      document.getElementById("btnRefreshArtifacts").addEventListener("click", async () => {
+        try {
+          await refreshArtifacts(selectedArtifactId());
+          logLine("artifacts_refreshed", { selected: selectedArtifactId() });
+        } catch (error) {
+          logLine("artifacts_refresh_error", String(error));
+        }
+      });
+
+      document.getElementById("btnAddArtifact").addEventListener("click", async () => {
+        const typed = newArtifactInput.value.trim();
+        const artifactId = typed || selectedArtifactId();
+        if (!artifactId) {
+          return;
+        }
+
+        ensureArtifactOption(artifactId);
+        artifactSelect.value = artifactId;
+        await refreshArtifactStatus();
+      });
+
+      artifactSelect.addEventListener("change", refreshArtifactStatus);
+
+      btnCapture.addEventListener("click", async () => {
+        try {
+          btnCapture.disabled = true;
+          await captureSample();
+        } catch (error) {
+          logLine("capture_sample_error", String(error));
+        } finally {
+          btnCapture.disabled = false;
+        }
+      });
+
+      btnAlign.addEventListener("click", async () => {
+        try {
+          btnAlign.disabled = true;
+          await startAlignment();
+        } catch (error) {
+          logLine("start_alignment_error", String(error));
+        } finally {
+          await refreshArtifactStatus();
+          btnAlign.disabled = false;
+        }
+      });
+
+      document.getElementById("btnFetchMeta").addEventListener("click", async () => {
+        try {
+          await fetchLatestMetadata();
+        } catch (error) {
+          logLine("fetch_metadata_error", String(error));
+        }
+      });
+
+      document.getElementById("btnFetchAck").addEventListener("click", async () => {
+        try {
+          await fetchAcks();
+        } catch (error) {
+          logLine("fetch_acks_error", String(error));
+        }
+      });
+
+      async function bootstrap() {
+        const savedDeviceId = localStorage.getItem("aps.device_id") || "";
+        deviceIdInput.value = savedDeviceId;
+
+        deviceIdInput.addEventListener("change", () => {
+          localStorage.setItem("aps.device_id", deviceIdInput.value.trim());
+        });
+
+        try {
+          await refreshArtifacts("artifact_demo_001");
+          logLine("ready", "Web alignment console loaded.");
+        } catch (error) {
+          logLine("bootstrap_error", String(error));
+        }
+      }
+
+      bootstrap();
+    </script>
+  </body>
+</html>

@@ -1,114 +1,228 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
 
 from .common import (
-    DIAMOND_OBJ_PTS,
     HAS_CPP,
     ROT_TOLERANCE,
     TRANS_TOLERANCE,
-    detect_diamond,
     extract_orb,
     pose_solver_cpp,
 )
 
 
+def _match_with_reference_fallback(
+    current_kp_xy: Any,
+    current_desc: Any,
+    ref_points_3d: Any,
+    ref_descriptors: Any,
+) -> tuple[Any, Any, int]:
+    if (
+        current_desc is None
+        or ref_descriptors is None
+        or len(current_desc) == 0
+        or len(ref_descriptors) == 0
+        or len(current_kp_xy) == 0
+        or len(ref_points_3d) == 0
+    ):
+        return np.empty((0, 3), dtype=np.float64), np.empty((0, 2), dtype=np.float64), 0
+
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+    knn = bf.knnMatch(current_desc, ref_descriptors, k=2)
+
+    good = []
+    for m_n in knn:
+        if len(m_n) < 2:
+            continue
+        m, n = m_n
+        if m.distance < 0.75 * n.distance and m.distance <= 64:
+            good.append(m)
+
+    if not good:
+        return np.empty((0, 3), dtype=np.float64), np.empty((0, 2), dtype=np.float64), 0
+
+    current_idx = np.array([m.queryIdx for m in good], dtype=np.int32)
+    ref_idx = np.array([m.trainIdx for m in good], dtype=np.int32)
+
+    points_2d = np.array(current_kp_xy[current_idx], dtype=np.float64)
+    points_3d = np.array(ref_points_3d[ref_idx], dtype=np.float64)
+    return points_3d, points_2d, len(good)
+
+
+def _match_with_reference(
+    current_kp_xy: Any,
+    current_desc: Any,
+    ref_points_3d: Any,
+    ref_descriptors: Any,
+) -> tuple[Any, Any, int]:
+    if (
+        current_desc is None
+        or ref_descriptors is None
+        or len(current_desc) == 0
+        or len(ref_descriptors) == 0
+        or len(current_kp_xy) == 0
+        or len(ref_points_3d) == 0
+    ):
+        return np.empty((0, 3), dtype=np.float64), np.empty((0, 2), dtype=np.float64), 0
+
+    if HAS_CPP and pose_solver_cpp is not None:
+        match_res = pose_solver_cpp.match_with_3d_reference(
+            np.array(current_kp_xy, dtype=np.float64),
+            np.array(current_desc, dtype=np.uint8),
+            np.array(ref_points_3d, dtype=np.float64),
+            np.array(ref_descriptors, dtype=np.uint8),
+        )
+        num_matches = int(match_res.get("num_matches", 0))
+        if num_matches <= 0:
+            return np.empty((0, 3), dtype=np.float64), np.empty((0, 2), dtype=np.float64), 0
+
+        points_3d = np.array(match_res["points_3d"], dtype=np.float64)
+        points_2d = np.array(match_res["points_2d"], dtype=np.float64)
+        return points_3d, points_2d, num_matches
+
+    return _match_with_reference_fallback(
+        current_kp_xy,
+        current_desc,
+        ref_points_3d,
+        ref_descriptors,
+    )
+
+
 def run_correction_step(image: Any, K: Any, D: Any, golden_pose: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {
         "diamond": None,
+        "anchor": None,
         "hybrid": None,
         "deviation": None,
         "motor_command": None,
         "num_orb_matches": 0,
+        "num_orb_inliers": 0,
         "timing": {},
-        "solver": "opencv_fallback",
+        "solver": "opencv_pnp",
         "g2o_enabled": bool(HAS_CPP),
     }
 
     t0 = time.time()
-    diamond = detect_diamond(image, K, D)
-    result["timing"]["diamond_ms"] = (time.time() - t0) * 1000
-
-    if diamond is None:
-        return result
-
-    result["diamond"] = diamond
-    diamond_3d = DIAMOND_OBJ_PTS.astype(np.float64)
-    diamond_2d = diamond["corners"].astype(np.float64)
-
-    t0 = time.time()
     _, desc_current, kp_xy = extract_orb(image)
-    result["timing"]["orb_ms"] = (time.time() - t0) * 1000
-
-    orb_3d = np.empty((0, 3), dtype=np.float64)
-    orb_2d = np.empty((0, 2), dtype=np.float64)
+    result["timing"]["features_ms"] = (time.time() - t0) * 1000
 
     ref_pts3d = golden_pose.get("points_3d")
     ref_desc = golden_pose.get("descriptors")
-
     if (
-        HAS_CPP
-        and pose_solver_cpp is not None
-        and ref_pts3d is not None
-        and ref_desc is not None
-        and len(ref_pts3d) > 0
-        and len(ref_desc) > 0
-        and desc_current is not None
-        and len(desc_current) > 0
+        ref_pts3d is None
+        or ref_desc is None
+        or len(ref_pts3d) == 0
+        or len(ref_desc) == 0
+        or len(kp_xy) == 0
+        or len(desc_current) == 0
     ):
-        t0 = time.time()
-        match_res = pose_solver_cpp.match_with_3d_reference(
-            kp_xy.astype(np.float64),
-            desc_current.astype(np.uint8),
-            np.array(ref_pts3d, dtype=np.float64),
-            np.array(ref_desc, dtype=np.uint8),
+        result["reason"] = "insufficient_reference_or_features"
+        return result
+
+    t0 = time.time()
+    orb_3d, orb_2d, num_matches = _match_with_reference(
+        kp_xy,
+        desc_current,
+        ref_pts3d,
+        ref_desc,
+    )
+    result["timing"]["match_ms"] = (time.time() - t0) * 1000
+    result["num_orb_matches"] = int(num_matches)
+
+    if len(orb_3d) < 8:
+        result["reason"] = "insufficient_matches"
+        return result
+
+    orb_2d_undist = cv2.undistortPoints(
+        orb_2d.reshape(-1, 1, 2).astype(np.float64),
+        K,
+        D,
+        P=K,
+    ).reshape(-1, 2)
+
+    t0 = time.time()
+    ok, rvec_init, tvec_init, inliers = cv2.solvePnPRansac(
+        np.array(orb_3d, dtype=np.float64),
+        np.array(orb_2d_undist, dtype=np.float64),
+        K,
+        None,
+        flags=cv2.SOLVEPNP_EPNP,
+        iterationsCount=300,
+        reprojectionError=2.5,
+        confidence=0.995,
+    )
+    if not ok:
+        ok, rvec_init, tvec_init = cv2.solvePnP(
+            np.array(orb_3d, dtype=np.float64),
+            np.array(orb_2d_undist, dtype=np.float64),
+            K,
+            None,
+            flags=cv2.SOLVEPNP_EPNP,
         )
-        result["timing"]["match_ms"] = (time.time() - t0) * 1000
-        result["num_orb_matches"] = match_res["num_matches"]
+        if ok:
+            inliers = np.arange(len(orb_3d), dtype=np.int32).reshape(-1, 1)
 
-        if match_res["num_matches"] > 0:
-            orb_3d = np.array(match_res["points_3d"], dtype=np.float64)
-            orb_2d = np.array(match_res["points_2d"], dtype=np.float64)
+    result["timing"]["pnp_ms"] = (time.time() - t0) * 1000
 
-    if HAS_CPP and pose_solver_cpp is not None:
-        diamond_2d_undist = cv2.undistortPoints(
-            diamond_2d.reshape(-1, 1, 2), K, D, P=K
-        ).reshape(-1, 2)
+    if not ok:
+        result["reason"] = "pnp_failed"
+        return result
 
-        if len(orb_2d) > 0:
-            orb_2d_undist = cv2.undistortPoints(
-                orb_2d.reshape(-1, 1, 2), K, D, P=K
-            ).reshape(-1, 2)
-        else:
-            orb_2d_undist = orb_2d
-
-        _, rvec_init, tvec_init = cv2.solvePnP(diamond_3d, diamond_2d_undist, K, None)
-
-        t0 = time.time()
-        hybrid = pose_solver_cpp.hybrid_optimize(
-            rvec_init.ravel().astype(np.float64),
-            tvec_init.ravel().astype(np.float64),
-            diamond_3d,
-            diamond_2d_undist,
-            orb_3d,
-            orb_2d_undist,
-            K.astype(np.float64),
-            D.ravel().astype(np.float64),
-        )
-        result["timing"]["hybrid_ms"] = (time.time() - t0) * 1000
-        result["hybrid"] = hybrid
-        result["solver"] = "g2o_hybrid_cpp"
-
-        rvec_final = np.array(hybrid["rvec"])
-        tvec_final = np.array(hybrid["tvec"])
+    if inliers is None or len(inliers) == 0:
+        inlier_idx = np.arange(len(orb_3d), dtype=np.int32)
     else:
-        rvec_final = diamond["rvec"]
-        tvec_final = diamond["tvec"]
+        inlier_idx = np.array(inliers, dtype=np.int32).reshape(-1)
+
+    orb_3d_inliers = np.array(orb_3d[inlier_idx], dtype=np.float64)
+    orb_2d_inliers = np.array(orb_2d_undist[inlier_idx], dtype=np.float64)
+    result["num_orb_inliers"] = int(len(orb_3d_inliers))
+
+    rvec_final = np.array(rvec_init, dtype=np.float64).ravel()
+    tvec_final = np.array(tvec_init, dtype=np.float64).ravel()
+
+    if HAS_CPP and pose_solver_cpp is not None and len(orb_3d_inliers) >= 6:
+        anchor_count = min(12, max(4, len(orb_3d_inliers) // 8))
+        anchor_indices = np.linspace(
+            0,
+            len(orb_3d_inliers) - 1,
+            num=anchor_count,
+            dtype=np.int32,
+        )
+        anchor_3d = np.array(orb_3d_inliers[anchor_indices], dtype=np.float64)
+        anchor_2d = np.array(orb_2d_inliers[anchor_indices], dtype=np.float64)
+
+        result["anchor"] = {
+            "count": int(len(anchor_indices)),
+            "source": "orb_quadtree_inliers",
+        }
+
+        t0 = time.time()
+        try:
+            dist_coeffs = np.array(D, dtype=np.float64).ravel() if D is not None else np.zeros(5)
+            hybrid = pose_solver_cpp.hybrid_optimize(
+                np.array(rvec_final, dtype=np.float64),
+                np.array(tvec_final, dtype=np.float64),
+                anchor_3d,
+                anchor_2d,
+                np.array(orb_3d_inliers, dtype=np.float64),
+                np.array(orb_2d_inliers, dtype=np.float64),
+                np.array(K, dtype=np.float64),
+                dist_coeffs,
+            )
+            result["hybrid"] = hybrid
+            result["solver"] = "g2o_quadtree_cpp"
+            rvec_final = np.array(hybrid["rvec"], dtype=np.float64)
+            tvec_final = np.array(hybrid["tvec"], dtype=np.float64)
+        except Exception as exc:
+            result["hybrid"] = {
+                "error": str(exc),
+            }
+            result["solver"] = "opencv_pnp"
+        result["timing"]["hybrid_ms"] = (time.time() - t0) * 1000
 
     t0 = time.time()
     if HAS_CPP and pose_solver_cpp is not None:
