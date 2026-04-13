@@ -82,6 +82,10 @@ class Settings:
     run_pose_on_upload: bool
     run_ai_on_upload: bool
     auto_dispatch_pose_command: bool
+    auto_alignment_retry_on_missing_deviation: bool
+    auto_alignment_retry_max_attempts: int
+    auto_alignment_max_move_steps: int
+    auto_alignment_max_move_rounds: int
 
     mqtt_host: str
     mqtt_port: int
@@ -174,6 +178,22 @@ def get_settings() -> Settings:
         run_pose_on_upload=_env_bool("RUN_POSE_ON_UPLOAD", True),
         run_ai_on_upload=_env_bool("RUN_AI_ON_UPLOAD", False),
         auto_dispatch_pose_command=_env_bool("AUTO_DISPATCH_POSE_COMMAND", True),
+        auto_alignment_retry_on_missing_deviation=_env_bool(
+            "AUTO_ALIGNMENT_RETRY_ON_MISSING_DEVIATION",
+            True,
+        ),
+        auto_alignment_retry_max_attempts=max(
+            0,
+            _env_int("AUTO_ALIGNMENT_RETRY_MAX_ATTEMPTS", 5),
+        ),
+        auto_alignment_max_move_steps=max(
+            1,
+            _env_int("AUTO_ALIGNMENT_MAX_MOVE_STEPS", 2500),
+        ),
+        auto_alignment_max_move_rounds=max(
+            0,
+            _env_int("AUTO_ALIGNMENT_MAX_MOVE_ROUNDS", 3),
+        ),
         mqtt_host=_env_str("MQTT_HOST", "127.0.0.1"),
         mqtt_port=_env_int("MQTT_PORT", 1883),
         mqtt_keepalive_sec=_env_int("MQTT_KEEPALIVE_SEC", 60),

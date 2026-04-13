@@ -239,7 +239,80 @@ class InspectionService:
                 "reason": f"capture_job_{capture_job}_no_dispatch",
             }
 
+        workflow = capture_payload.get("workflow")
+        if not isinstance(workflow, dict):
+            workflow = {}
+
+        auto_alignment_loop = bool(workflow.get("auto_alignment_loop", False))
+        retry_count = self._safe_int(workflow.get("alignment_retry_count"), 0)
+        move_count = self._safe_int(workflow.get("alignment_move_count"), 0)
+
         if pose_result.get("deviation") is None:
+            pose_reason = str(pose_result.get("reason", "")).strip().lower()
+            retryable_reasons = {
+                "insufficient_matches",
+                "insufficient_reference_or_features",
+            }
+            can_retry = (
+                self._settings.auto_alignment_retry_on_missing_deviation
+                and auto_alignment_loop
+                and pose_reason in retryable_reasons
+                and retry_count < self._settings.auto_alignment_retry_max_attempts
+            )
+
+            if can_retry:
+                next_retry_count = retry_count + 1
+                retry_payload = self._build_retry_capture_payload(
+                    capture_payload=capture_payload,
+                    artifact_id=artifact_id,
+                    prior_workflow=workflow,
+                    pose_reason=pose_reason,
+                    retry_count=next_retry_count,
+                )
+                published, result = self._mqtt_bridge.publish_command(device_id, retry_payload)
+                queued = 0
+                mode = "mqtt"
+
+                if not published:
+                    queued = self._command_service.queue_command(device_id, retry_payload)
+                    mode = "http_queue_fallback"
+
+                return {
+                    "ok": True,
+                    "sent": True,
+                    "mode": mode,
+                    "device_id": device_id,
+                    "task_id": retry_payload["task_id"],
+                    "published": published,
+                    "topic": result if published else None,
+                    "publish_error": None if published else result,
+                    "queued": queued,
+                    "reason": "retry_capture_due_to_missing_deviation",
+                    "retry_state": {
+                        "pose_reason": pose_reason,
+                        "attempt": next_retry_count,
+                        "max_attempts": self._settings.auto_alignment_retry_max_attempts,
+                    },
+                    "payload": retry_payload,
+                }
+
+            if (
+                self._settings.auto_alignment_retry_on_missing_deviation
+                and auto_alignment_loop
+                and pose_reason in retryable_reasons
+                and retry_count >= self._settings.auto_alignment_retry_max_attempts
+            ):
+                return {
+                    "ok": True,
+                    "sent": False,
+                    "reason": "retry_limit_reached",
+                    "retry_state": {
+                        "pose_reason": pose_reason,
+                        "attempt": retry_count,
+                        "max_attempts": self._settings.auto_alignment_retry_max_attempts,
+                    },
+                }
+
             return {
                 "ok": False,
                 "sent": False,
@@ -252,6 +325,20 @@ class InspectionService:
                 "ok": True,
                 "sent": False,
                 "reason": "within_tolerance",
+            }
+
+        if (
+            auto_alignment_loop
+            and move_count >= self._settings.auto_alignment_max_move_rounds
+        ):
+            return {
+                "ok": True,
+                "sent": False,
+                "reason": "move_round_limit_reached",
+                "move_state": {
+                    "attempt": move_count,
+                    "max_attempts": self._settings.auto_alignment_max_move_rounds,
+                },
             }
 
         motor_command = pose_result.get("motor_command") or deviation.get("motor_command") or {}
@@ -267,23 +354,31 @@ class InspectionService:
         rotate_pan = float(motor_command.get("rotate_pan", 0.0) or 0.0)
         rotate_tilt = float(motor_command.get("rotate_tilt", 0.0) or 0.0)
 
+        x_dir = 1 if move_x >= 0 else -1
+        z_dir = 1 if move_z >= 0 else -1
+        x_steps_raw = int(abs(round(move_x)))
+        z_steps_raw = int(abs(round(move_z)))
+        max_move_steps = self._settings.auto_alignment_max_move_steps
+        x_steps = min(x_steps_raw, max_move_steps)
+        z_steps = min(z_steps_raw, max_move_steps)
+
         movement_steps: list[dict[str, Any]] = []
         if abs(rotate_pan) > 1e-9:
             movement_steps.append({"axis": "pan", "delta": rotate_pan})
         if abs(rotate_tilt) > 1e-9:
             movement_steps.append({"axis": "tilt", "delta": rotate_tilt})
-        if abs(move_x) > 1e-9:
+        if x_steps > 0:
             movement_steps.append(
                 {
                     "axis": "slider_x",
-                    "steps": int(abs(round(move_x))) * (1 if move_x >= 0 else -1),
+                    "steps": x_steps * x_dir,
                 }
             )
-        if abs(move_z) > 1e-9:
+        if z_steps > 0:
             movement_steps.append(
                 {
                     "axis": "slider_z",
-                    "steps": int(abs(round(move_z))) * (1 if move_z >= 0 else -1),
+                    "steps": z_steps * z_dir,
                 }
             )
 
@@ -292,15 +387,17 @@ class InspectionService:
             "task_id": self._command_service.build_task_id(),
             "yaw_delta": rotate_pan,
             "pitch_delta": rotate_tilt,
-            "x_steps": int(abs(round(move_x))),
-            "z_steps": int(abs(round(move_z))),
-            "x_dir": 1 if move_x >= 0 else -1,
-            "z_dir": 1 if move_z >= 0 else -1,
+            "x_steps": x_steps,
+            "z_steps": z_steps,
+            "x_dir": x_dir,
+            "z_dir": z_dir,
             "movement_steps": movement_steps,
             "workflow": {
                 "auto_alignment_loop": True,
                 "capture_job": "alignment",
                 "source": "g2o_correction",
+                "alignment_move_count": move_count + 1,
+                "alignment_move_max_rounds": self._settings.auto_alignment_max_move_rounds,
             },
             "capture_after_move": self._build_capture_after_move(
                 capture_payload=capture_payload,
@@ -327,8 +424,63 @@ class InspectionService:
             "topic": result if published else None,
             "publish_error": None if published else result,
             "queued": queued,
+            "safety_guard": {
+                "max_move_steps": max_move_steps,
+                "x_steps_raw": x_steps_raw,
+                "z_steps_raw": z_steps_raw,
+                "move_round": move_count + 1,
+                "move_round_limit": self._settings.auto_alignment_max_move_rounds,
+            },
             "payload": payload,
         }
+
+    def _build_retry_capture_payload(
+        self,
+        capture_payload: dict[str, Any],
+        artifact_id: str,
+        prior_workflow: dict[str, Any],
+        pose_reason: str,
+        retry_count: int,
+    ) -> dict[str, Any]:
+        retry_capture_spec = self._build_capture_after_move(
+            capture_payload=capture_payload,
+            artifact_id=artifact_id,
+        )
+
+        retry_workflow = dict(prior_workflow)
+        retry_workflow["request_type"] = "alignment_retry"
+        retry_workflow["auto_alignment_loop"] = True
+        retry_workflow["capture_job"] = "alignment"
+        retry_workflow["source"] = "g2o_correction"
+        retry_workflow["retry_on"] = pose_reason
+        retry_workflow["alignment_retry_count"] = retry_count
+        retry_workflow["alignment_retry_max_attempts"] = (
+            self._settings.auto_alignment_retry_max_attempts
+        )
+
+        payload: dict[str, Any] = {
+            "action": "capture",
+            "task_id": self._command_service.build_task_id(),
+            "artifact_id": artifact_id,
+            "capture_job": "alignment",
+            "basename": f"align_retry_{artifact_id}_{int(time.time() * 1000)}",
+            "workflow": retry_workflow,
+        }
+
+        for key in (
+            "autofocus_mode",
+            "lens_position",
+            "awbgains",
+            "gain",
+            "shutter",
+            "pre_set_controls_delay_sec",
+            "pre_capture_request_delay_sec",
+            "autofocus_probe_sec",
+        ):
+            if key in retry_capture_spec:
+                payload[key] = retry_capture_spec[key]
+
+        return payload
 
     def _build_capture_after_move(
         self,
@@ -381,3 +533,10 @@ class InspectionService:
             except (TypeError, ValueError):
                 continue
         return None
+
+    @staticmethod
+    def _safe_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default

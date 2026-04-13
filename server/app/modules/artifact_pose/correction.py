@@ -253,6 +253,44 @@ def run_correction_step(image: Any, K: Any, D: Any, golden_pose: dict[str, Any])
             yaw = 0.0
 
         rot_mag = float(np.sqrt(roll**2 + pitch**2 + yaw**2))
+        within_tolerance = trans_mag < TRANS_TOLERANCE and rot_mag < ROT_TOLERANCE
+
+        # Keep fallback motor command behavior close to C++ path to avoid stalling
+        # when native extension is unavailable.
+        steps_per_mm = 860.0
+        max_slider_steps = 10000.0
+        max_rotate_deg = 25.0
+
+        move_x = float(delta_t[0] * 1000.0 * steps_per_mm)
+        move_z = float(delta_t[2] * 1000.0 * steps_per_mm)
+        rotate_pan = float(pitch)
+        rotate_tilt = float(roll)
+
+        if not np.isfinite(move_x):
+            move_x = 0.0
+        if not np.isfinite(move_z):
+            move_z = 0.0
+        if not np.isfinite(rotate_pan):
+            rotate_pan = 0.0
+        if not np.isfinite(rotate_tilt):
+            rotate_tilt = 0.0
+
+        move_x = float(np.clip(move_x, -max_slider_steps, max_slider_steps))
+        move_z = float(np.clip(move_z, -max_slider_steps, max_slider_steps))
+        rotate_pan = float(np.clip(rotate_pan, -max_rotate_deg, max_rotate_deg))
+        rotate_tilt = float(np.clip(rotate_tilt, -max_rotate_deg, max_rotate_deg))
+
+        need_trans = trans_mag >= TRANS_TOLERANCE
+        need_rot = rot_mag >= ROT_TOLERANCE
+        if not need_trans and not need_rot:
+            priority = 0
+        elif need_trans and not need_rot:
+            priority = 1
+        elif not need_trans and need_rot:
+            priority = 2
+        else:
+            priority = 3
+
         deviation = {
             "delta_x": float(delta_t[0]),
             "delta_y": float(delta_t[1]),
@@ -262,13 +300,13 @@ def run_correction_step(image: Any, K: Any, D: Any, golden_pose: dict[str, Any])
             "delta_roll": yaw,
             "translation_mag": trans_mag,
             "rotation_mag": rot_mag,
-            "within_tolerance": trans_mag < TRANS_TOLERANCE and rot_mag < ROT_TOLERANCE,
+            "within_tolerance": within_tolerance,
             "motor_command": {
-                "move_x": 0,
-                "move_z": 0,
-                "rotate_pan": 0,
-                "rotate_tilt": 0,
-                "priority": 0,
+                "move_x": move_x,
+                "move_z": move_z,
+                "rotate_pan": rotate_pan,
+                "rotate_tilt": rotate_tilt,
+                "priority": priority,
             },
         }
 

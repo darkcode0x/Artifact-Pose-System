@@ -139,6 +139,7 @@ class AppConfig:
     server_base_url: str = field(
         default_factory=lambda: _env_str("SERVER_BASE_URL", "http://127.0.0.1:8000")
     )
+    api_timeout_sec: int = field(default_factory=lambda: _env_int("API_TIMEOUT_SEC", 60))
     image_dir: Path = field(
         default_factory=lambda: Path(
             _env_str("IMAGE_DIR", str(_DEFAULT_IMAGE_DIR))
@@ -221,6 +222,7 @@ class MainApp:
             APIConfig(
                 base_url=config.server_base_url,
                 device_id=config.device_id or "unassigned",
+                timeout_sec=max(10, int(config.api_timeout_sec)),
             )
         )
         self._resolve_device_id()
