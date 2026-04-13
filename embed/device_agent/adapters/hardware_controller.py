@@ -84,19 +84,21 @@ class HardwareController:
             raise
 
     def set_pan_tilt(self, yaw_deg: float, pitch_deg: float) -> None:
-        """Dat goc Yaw/Pitch theo do."""
+        """Dat truc tiep goc Yaw/Pitch nhan duoc tu lenh."""
         if self._kit is None:
             raise RuntimeError("PCA9685 chua duoc khoi tao")
 
         try:
-            pan_target = self._map_yaw_to_servo(yaw_deg)
+            pan_target = int(round(yaw_deg))
+            pan_target = max(self.servo_config.pan_min, min(self.servo_config.pan_max, pan_target))
             print(f"pan_target: {pan_target}")
-            tilt_target = self._map_pitch_to_servo(pitch_deg)
+            tilt_target = int(round(pitch_deg))
+            tilt_target = max(self.servo_config.tilt_min, min(self.servo_config.tilt_max, tilt_target))
             print(f"tilt_target: {tilt_target}")
             self._kit.servo[self.servo_config.pan_channel].angle = pan_target
             self._kit.servo[self.servo_config.tilt_channel].angle = tilt_target
-            self.current_yaw = int(yaw_deg)
-            self.current_pitch = int(pitch_deg)
+            self.current_yaw = pan_target
+            self.current_pitch = tilt_target
         except Exception as exc:
             raise RuntimeError(f"Loi dieu khien servo: {exc}") from exc
 
@@ -191,18 +193,3 @@ class HardwareController:
             self._gpio.output(pul_pin, self._gpio.LOW)
             time.sleep(effective_pulse_delay)
 
-    def _map_yaw_to_servo(self, yaw_deg: float) -> float:
-        """Map yaw tu [-90, 90] sang khoang pan servo an toan."""
-        clipped = max(-90.0, min(90.0, yaw_deg))
-        ratio = (clipped + 90.0) / 180.0
-        return self.servo_config.pan_min + ratio * (
-            self.servo_config.pan_max - self.servo_config.pan_min
-        )
-
-    def _map_pitch_to_servo(self, pitch_deg: float) -> float:
-        """Map pitch tu [-90, 90] sang khoang tilt servo an toan."""
-        clipped = max(-90.0, min(90.0, pitch_deg))
-        ratio = (clipped + 90.0) / 180.0
-        return self.servo_config.tilt_min + ratio * (
-            self.servo_config.tilt_max - self.servo_config.tilt_min
-        )
