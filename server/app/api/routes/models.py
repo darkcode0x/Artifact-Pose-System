@@ -9,6 +9,8 @@ from app.schemas.models import (
     ModelLoadResponse,
     ModelPredictRequest,
     ModelPredictResponse,
+    ModelSyncFailure,
+    ModelSyncResponse,
 )
 from app.services.state import AppContainer
 
@@ -83,4 +85,44 @@ def predict(
         ok=True,
         model_name=name,
         output=output,
+    )
+
+
+@router.post("/models/sync", response_model=ModelSyncResponse)
+def sync_models(
+    force_reload: bool = False,
+    container: AppContainer = Depends(get_container),
+) -> ModelSyncResponse:
+    report = container.model_service.sync_from_model_dir(force_reload=force_reload)
+
+    loaded_items = [
+        ModelInfo(
+            name=item["name"],
+            backend=item["backend"],
+            path=item.get("path"),
+            labels=item.get("labels", []),
+            loaded_at=item["loaded_at"],
+        )
+        for item in report.get("loaded", [])
+    ]
+
+    failed_items = [
+        ModelSyncFailure(
+            name=item["name"],
+            path=item["path"],
+            error=item["error"],
+        )
+        for item in report.get("failed", [])
+    ]
+
+    return ModelSyncResponse(
+        ok=True,
+        model_dir=report.get("model_dir", ""),
+        total_files=int(report.get("total_files", 0)),
+        loaded_count=int(report.get("loaded_count", 0)),
+        skipped_count=int(report.get("skipped_count", 0)),
+        failed_count=int(report.get("failed_count", 0)),
+        loaded=loaded_items,
+        skipped=list(report.get("skipped", [])),
+        failed=failed_items,
     )

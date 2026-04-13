@@ -33,3 +33,21 @@ class ModelPredictResponse(BaseModel):
     ok: bool
     model_name: str
     output: Any
+
+
+class ModelSyncFailure(BaseModel):
+    name: str
+    path: str
+    error: str
+
+
+class ModelSyncResponse(BaseModel):
+    ok: bool
+    model_dir: str
+    total_files: int
+    loaded_count: int
+    skipped_count: int
+    failed_count: int
+    loaded: list[ModelInfo] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)
+    failed: list[ModelSyncFailure] = Field(default_factory=list)

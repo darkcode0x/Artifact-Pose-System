@@ -26,6 +26,15 @@ class AppContainer:
         )
 
     def startup(self) -> None:
+        report = self.model_service.sync_from_model_dir(force_reload=False)
+        print(
+            "[MODEL] Startup sync: "
+            f"total={report['total_files']} loaded={report['loaded_count']} "
+            f"skipped={report['skipped_count']} failed={report['failed_count']}"
+        )
+        for failure in report.get("failed", [])[:5]:
+            print(f"[MODEL] Failed {failure['name']}: {failure['error']}")
+
         self.mqtt_bridge.start()
 
     def shutdown(self) -> None:

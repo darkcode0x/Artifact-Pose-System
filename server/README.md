@@ -9,7 +9,7 @@ Server nay duoc viet de ket noi voi device_agent va mobile thong qua REST API, d
   - `POST /devices/{device_id}/move`
   - `POST /inspections/upload`
 - Ho tro queue command va publish command qua MQTT
-- Ho tro module nap model AI (mock/onnx/torchscript)
+- Ho tro module nap model AI (onnx/torch/ultralytics)
 - Tich hop truc tiep Artifact Pose module trong server de can chinh pose bang G2O
 - Cau truc code de de mo rong va quan ly
 
@@ -73,6 +73,7 @@ Neu can AI backend thuc:
 ```bash
 pip install onnxruntime
 pip install torch
+pip install ultralytics
 ```
 
 ## Deploy local voi Docker (server + PostgreSQL + MQTT)
@@ -202,9 +203,16 @@ Neu bat `RUN_AI_ON_UPLOAD=true`, metadata can co:
 ### Model AI
 
 - `GET /models`
+- `POST /models/sync` (quet va nap model tu `./model`)
 - `POST /models/load`
 - `DELETE /models/{name}`
 - `POST /models/{name}/predict`
+
+Server tu dong goi sync model khi startup:
+
+- Quet `MODEL_DIR` (mac dinh `./model`)
+- Tu nap cac file `.onnx`, `.pt`, `.pth`
+- Neu model `.pt` la checkpoint Ultralytics, backend se tu chon `ultralytics`
 
 ### Pose
 

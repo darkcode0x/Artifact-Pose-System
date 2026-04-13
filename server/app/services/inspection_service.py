@@ -67,7 +67,7 @@ class InspectionService:
 
         ai_result: dict[str, Any] | None = None
         if self._settings.run_ai_on_upload:
-            ai_result = self._run_ai(metadata)
+            ai_result = self._run_ai(metadata, target_path)
 
         record = {
             "timestamp_ms": int(time.time() * 1000),
@@ -171,20 +171,21 @@ class InspectionService:
         with self._settings.inspections_log_file.open("a", encoding="utf-8") as fp:
             fp.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    def _run_ai(self, metadata: dict[str, Any]) -> dict[str, Any] | None:
+    def _run_ai(self, metadata: dict[str, Any], image_path: Path) -> dict[str, Any] | None:
         model_name = metadata.get("model_name")
-        ai_input = metadata.get("ai_input")
+        if not model_name:
+            model_name = self._model_service.get_default_model_name()
 
         if not model_name:
             return {
                 "ok": False,
-                "error": "model_name is missing in metadata",
+                "error": "No model is loaded. Put models in ./model and call /models/sync",
             }
 
+        ai_input = metadata.get("ai_input")
         if ai_input is None:
-            return {
-                "ok": False,
-                "error": "ai_input is missing in metadata",
+            ai_input = {
+                "image_path": str(image_path),
             }
 
         try:
