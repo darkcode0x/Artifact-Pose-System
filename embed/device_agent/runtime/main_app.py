@@ -390,7 +390,7 @@ class MainApp:
         except Exception as exc:
             print(f"[MQTT] Loi parse command: {exc}")
             return
-
+        print(f"[MQTT] Nhan lenh: {command}")
         result = self.execute_command(command)
         self._publish_ack(command, result)
 
@@ -481,7 +481,8 @@ class MainApp:
 
     def _handle_pan_tilt(self, command: Dict[str, Any]) -> None:
         direction = str(command.get("direction", "")).lower()
-        angle = float(command.get("angle", 0.0))
+        # TODO: angle chi la so nguyen. Nho chuyen ve so nguyen
+        angle = int(command.get("angle", 0.0))
 
         yaw = self.hardware.current_yaw
         pitch = self.hardware.current_pitch
@@ -495,8 +496,8 @@ class MainApp:
         elif direction == "down":
             pitch = -abs(angle)
         else:
-            yaw = float(command.get("yaw_deg", yaw))
-            pitch = float(command.get("pitch_deg", pitch))
+            yaw = int(command.get("yaw_deg", yaw))
+            pitch = int(command.get("pitch_deg", pitch))
 
         self.hardware.set_pan_tilt(yaw, pitch)
 

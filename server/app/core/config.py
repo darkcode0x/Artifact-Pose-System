@@ -133,7 +133,7 @@ def get_settings() -> Settings:
     )
     artifact_pose_root = Path(artifact_pose_root_raw)
 
-    camera_params_default = SERVER_ROOT / "data" / "camera_params_4k.yaml"
+    camera_params_default = SERVER_ROOT / "data" / "camera_params.yaml"
     camera_params_dir_default = SERVER_ROOT / "data" / "camera_params"
     golden_pose_default = SERVER_ROOT / "data" / "golden_pose.yaml"
 

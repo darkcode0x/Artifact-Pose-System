@@ -11,8 +11,8 @@ from typing import Optional
 class ServoConfig:
     """Cau hinh servo cho PCA9685."""
 
-    pan_channel: int = 0
-    tilt_channel: int = 1
+    pan_channel: int = 1
+    tilt_channel: int = 0
     pan_min: int = 0
     pan_max: int = 100
     tilt_min: int = 0
@@ -42,8 +42,8 @@ class HardwareController:
         self.servo_config = servo_config or ServoConfig()
         self.slider_config = slider_config or SliderConfig()
 
-        self.current_yaw: float = 0.0
-        self.current_pitch: float = 0.0
+        self.current_yaw: int = 0
+        self.current_pitch: int = 0
         self.current_x_steps: int = 0
         self.current_z_steps: int = 0
 
@@ -90,11 +90,13 @@ class HardwareController:
 
         try:
             pan_target = self._map_yaw_to_servo(yaw_deg)
+            print(f"pan_target: {pan_target}")
             tilt_target = self._map_pitch_to_servo(pitch_deg)
+            print(f"tilt_target: {tilt_target}")
             self._kit.servo[self.servo_config.pan_channel].angle = pan_target
             self._kit.servo[self.servo_config.tilt_channel].angle = tilt_target
-            self.current_yaw = yaw_deg
-            self.current_pitch = pitch_deg
+            self.current_yaw = int(yaw_deg)
+            self.current_pitch = int(pitch_deg)
         except Exception as exc:
             raise RuntimeError(f"Loi dieu khien servo: {exc}") from exc
 
