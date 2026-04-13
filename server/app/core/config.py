@@ -101,6 +101,9 @@ class Settings:
 
     ack_history_limit: int
 
+    max_alignment_iterations: int
+    alignment_timeout_sec: int
+
     @property
     def uploads_dir(self) -> Path:
         return self.data_dir / "uploads"
@@ -192,4 +195,6 @@ def get_settings() -> Settings:
         artifact_lens_position=artifact_lens_position,
         artifact_golden_pose=Path(_env_str("ARTIFACT_GOLDEN_POSE", str(golden_pose_default))),
         ack_history_limit=max(1, _env_int("ACK_HISTORY_LIMIT", 200)),
+        max_alignment_iterations=max(1, _env_int("MAX_ALIGNMENT_ITERATIONS", 20)),
+        alignment_timeout_sec=max(10, _env_int("ALIGNMENT_TIMEOUT_SEC", 300)),
     )

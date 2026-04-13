@@ -469,6 +469,24 @@ class MainApp:
                 self._mark_processed_task(task_id)
                 return {"status": "ok", "action": action}
 
+            if action == "alignment_complete":
+                deviation = command.get("deviation", {})
+                print(f"[APP] === ALIGNMENT COMPLETE === artifact={command.get('artifact_id')} deviation={deviation}")
+                self._mark_processed_task(task_id)
+                return {"status": "ok", "action": action, "artifact_id": command.get("artifact_id")}
+
+            if action == "alignment_failed":
+                reason = command.get("reason", "unknown")
+                iteration = command.get("iteration")
+                print(f"[APP] === ALIGNMENT FAILED === artifact={command.get('artifact_id')} reason={reason} iteration={iteration}")
+                self._mark_processed_task(task_id)
+                return {"status": "ok", "action": action, "reason": reason}
+
+            if action == "capture_stereo_pair":
+                self._handle_capture_stereo_pair(command)
+                self._mark_processed_task(task_id)
+                return {"status": "ok", "action": action}
+
             print(f"[APP] Bo qua action khong ho tro: {action}")
             return {"status": "ignored", "reason": "unsupported_action", "action": action}
         except Exception as exc:
@@ -686,48 +704,65 @@ class MainApp:
         slow_steps = total_steps - fast_steps
         return fast_steps, slow_steps
 
+    def _handle_capture_stereo_pair(self, command: Dict[str, Any]) -> None:
+        """Chup cap anh stereo: left → di chuyen slider X → right → quay lai → upload."""
+        artifact_id = str(command.get("artifact_id", self.config.default_artifact_id))
+        baseline_steps = int(command.get("baseline_steps", 86000))
+        lens_position = float(command.get("lens_position", self.config.lens_position))
+        ts = time.time_ns()
+
+        # 1) Chup anh LEFT tai vi tri hien tai
+        print(f"[STEREO] Chup anh LEFT, artifact={artifact_id}")
+        left_result = self.camera.capture_simple(
+            basename=f"stereo_left_{artifact_id}_{ts}",
+            lens_position=lens_position,
+        )
+        if left_result is None:
+            print("[STEREO] Capture LEFT that bai")
+            return
+
+        # 2) Di chuyen slider X them baseline_steps (huong duong)
+        print(f"[STEREO] Di chuyen slider X +{baseline_steps} steps")
+        self._move_slider_x_with_profile(abs(baseline_steps), 1)
+        time.sleep(0.5)
+
+        # 3) Chup anh RIGHT
+        print(f"[STEREO] Chup anh RIGHT, artifact={artifact_id}")
+        right_result = self.camera.capture_simple(
+            basename=f"stereo_right_{artifact_id}_{ts}",
+            lens_position=lens_position,
+        )
+        if right_result is None:
+            print("[STEREO] Capture RIGHT that bai, quay lai vi tri cu")
+            self._move_slider_x_with_profile(abs(baseline_steps), -1)
+            return
+
+        # 4) Quay lai vi tri ban dau
+        print(f"[STEREO] Quay slider X -{baseline_steps} steps ve vi tri cu")
+        self._move_slider_x_with_profile(abs(baseline_steps), -1)
+
+        # 5) Upload cap anh len server /pose/initialize_golden
+        print("[STEREO] Upload stereo pair len server")
+        result = self.api_client.upload_stereo_pair(
+            left_path=left_result.image_path,
+            right_path=right_result.image_path,
+        )
+        if result is None:
+            print("[STEREO] Upload stereo pair that bai")
+        else:
+            print(f"[STEREO] Initialize golden thanh cong: {result.get('message', '')}")
+
     def _handle_capture(self, command: Dict[str, Any]) -> None:
         artifact_id = str(command.get("artifact_id", self.config.default_artifact_id))
         capture_job = str(command.get("capture_job", "alignment")).strip().lower()
         default_prefix = "golden_sample" if capture_job == "golden_sample" else "align_capture"
         basename = str(command.get("basename", f"{default_prefix}_{artifact_id}_{time.time_ns()}"))
 
-        autofocus_mode = str(command.get("autofocus_mode", self.config.autofocus_mode))
         lens_position = float(command.get("lens_position", self.config.lens_position))
-        awbgains = command.get("awbgains", (self.config.awbgains_r, self.config.awbgains_b))
-        if not isinstance(awbgains, (list, tuple)) or len(awbgains) != 2:
-            awbgains = (self.config.awbgains_r, self.config.awbgains_b)
-        gain = float(command.get("gain", self.config.gain))
-        shutter = int(command.get("shutter", self.config.shutter))
-        pre_set_delay = float(
-            command.get(
-                "pre_set_controls_delay_sec",
-                self.config.pre_set_controls_delay_sec,
-            )
-        )
-        pre_capture_delay = float(
-            command.get(
-                "pre_capture_request_delay_sec",
-                self.config.pre_capture_request_delay_sec,
-            )
-        )
-        autofocus_probe_sec = float(
-            command.get(
-                "autofocus_probe_sec",
-                self.config.capture_autofocus_probe_sec,
-            )
-        )
 
-        capture_outcome = self.camera.capture_high_quality_with_metadata(
+        capture_outcome = self.camera.capture_simple(
             basename=basename,
-            autofocus_mode=autofocus_mode,
             lens_position=lens_position,
-            awbgains=awbgains,
-            gain=gain,
-            shutter=shutter,
-            pre_set_controls_delay_sec=pre_set_delay,
-            pre_capture_request_delay_sec=pre_capture_delay,
-            autofocus_probe_sec=autofocus_probe_sec,
         )
         if capture_outcome is None:
             print("[APP] Capture that bai theo lenh server")
@@ -744,14 +779,7 @@ class MainApp:
             "capture_job": capture_job,
             "capture_name_type": capture_name_type,
             "camera_static_params": {
-                "autofocus_mode": autofocus_mode,
                 "lens_position": lens_position,
-                "awbgains": [float(awbgains[0]), float(awbgains[1])],
-                "gain": gain,
-                "shutter": shutter,
-                "pre_set_controls_delay_sec": pre_set_delay,
-                "pre_capture_request_delay_sec": pre_capture_delay,
-                "autofocus_probe_sec": autofocus_probe_sec,
             },
             "camera_runtime_metadata": capture_outcome.metadata,
             "workflow": command.get("workflow", {}),

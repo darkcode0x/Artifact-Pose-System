@@ -25,6 +25,13 @@ class StartAlignmentRequest(BaseModel):
     camera_overrides: dict[str, Any] = Field(default_factory=dict)
 
 
+class StartInitializationRequest(BaseModel):
+    artifact_id: str = "artifact_demo_001"
+    baseline_mm: float = Field(default=100.0, gt=0, description="Stereo baseline in mm")
+    steps_per_mm: float = Field(default=860.0, gt=0, description="Stepper motor steps per mm")
+    camera_overrides: dict[str, Any] = Field(default_factory=dict)
+
+
 class TriggerCommandResponse(BaseModel):
     ok: bool
     device_id: str
