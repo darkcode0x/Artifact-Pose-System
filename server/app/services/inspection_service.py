@@ -312,10 +312,12 @@ class InspectionService:
                 "reason": "invalid_motor_command",
             }
 
-        move_x = float(motor_command.get("move_x", 0.0) or 0.0)
-        move_z = float(motor_command.get("move_z", 0.0) or 0.0)
-        rotate_pan = float(motor_command.get("rotate_pan", 0.0) or 0.0)
-        rotate_tilt = float(motor_command.get("rotate_tilt", 0.0) or 0.0)
+        # motor_command chua gia tri DEVIATION (lech bao nhieu).
+        # De CORRECT (dua ve golden), motor phai di NGUOC CHIEU deviation.
+        move_x = -float(motor_command.get("move_x", 0.0) or 0.0)
+        move_z = -float(motor_command.get("move_z", 0.0) or 0.0)
+        rotate_pan = -float(motor_command.get("rotate_pan", 0.0) or 0.0)
+        rotate_tilt = -float(motor_command.get("rotate_tilt", 0.0) or 0.0)
 
         movement_steps: list[dict[str, Any]] = []
         if abs(rotate_pan) > 1e-9:
