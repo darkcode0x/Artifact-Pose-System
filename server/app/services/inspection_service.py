@@ -312,12 +312,25 @@ class InspectionService:
                 "reason": "invalid_motor_command",
             }
 
-        # motor_command chua gia tri DEVIATION (lech bao nhieu).
-        # De CORRECT (dua ve golden), motor phai di NGUOC CHIEU deviation.
-        move_x = -float(motor_command.get("move_x", 0.0) or 0.0)
-        move_z = -float(motor_command.get("move_z", 0.0) or 0.0)
-        rotate_pan = -float(motor_command.get("rotate_pan", 0.0) or 0.0)
-        rotate_tilt = -float(motor_command.get("rotate_tilt", 0.0) or 0.0)
+        # Raw values from C++ deviation calculator
+        raw_move_x = float(motor_command.get("move_x", 0.0) or 0.0)
+        raw_move_z = float(motor_command.get("move_z", 0.0) or 0.0)
+        raw_rotate_pan = float(motor_command.get("rotate_pan", 0.0) or 0.0)
+        raw_rotate_tilt = float(motor_command.get("rotate_tilt", 0.0) or 0.0)
+
+        # Apply configurable sign multipliers (default -1 = negate deviation for correction)
+        move_x = raw_move_x * self._settings.sign_move_x
+        move_z = raw_move_z * self._settings.sign_move_z
+        rotate_pan = raw_rotate_pan * self._settings.sign_rotate_pan
+        rotate_tilt = raw_rotate_tilt * self._settings.sign_rotate_tilt
+
+        print(
+            f"[POSE_DISPATCH] iter={iteration} "
+            f"raw: x={raw_move_x:.1f} z={raw_move_z:.1f} pan={raw_rotate_pan:.3f} tilt={raw_rotate_tilt:.3f} | "
+            f"signs: x={self._settings.sign_move_x} z={self._settings.sign_move_z} "
+            f"pan={self._settings.sign_rotate_pan} tilt={self._settings.sign_rotate_tilt} | "
+            f"final: x={move_x:.1f} z={move_z:.1f} pan={rotate_pan:.3f} tilt={rotate_tilt:.3f}"
+        )
 
         movement_steps: list[dict[str, Any]] = []
         if abs(rotate_pan) > 1e-9:
