@@ -178,7 +178,7 @@ class AppConfig:
 
     # Camera defaults (co the override tu lenh server khi action="capture").
     autofocus_mode: str = field(default_factory=lambda: _env_str("AUTOFOCUS_MODE", "manual"))
-    lens_position: float = field(default_factory=lambda: _env_float("LENS_POSITION", 2.5))
+    lens_position: float = field(default_factory=lambda: _env_float("LENS_POSITION", 1.5))
     awbgains_r: float = field(default_factory=lambda: _env_float("AWBGAINS_R", 1.2))
     awbgains_b: float = field(default_factory=lambda: _env_float("AWBGAINS_B", 1.5))
     gain: float = field(default_factory=lambda: _env_float("GAIN", 1.0))
@@ -499,20 +499,19 @@ class MainApp:
 
     def _handle_pan_tilt(self, command: Dict[str, Any]) -> None:
         direction = str(command.get("direction", "")).lower()
-        # TODO: angle chi la so nguyen. Nho chuyen ve so nguyen
         angle = int(command.get("angle", 0.0))
 
         yaw = self.hardware.current_yaw
         pitch = self.hardware.current_pitch
 
         if direction == "left":
-            yaw = -abs(angle)
+            yaw -= abs(angle)
         elif direction == "right":
-            yaw = abs(angle)
+            yaw += abs(angle)
         elif direction == "up":
-            pitch = abs(angle)
+            pitch += abs(angle)
         elif direction == "down":
-            pitch = -abs(angle)
+            pitch -= abs(angle)
         else:
             yaw = int(command.get("yaw_deg", yaw))
             pitch = int(command.get("pitch_deg", pitch))
@@ -533,6 +532,12 @@ class MainApp:
 
     def _handle_compound_move(self, command: Dict[str, Any]) -> None:
         # Ho tro schema server gui bo tham so tong hop sau khi tinh pose tren server.
+        # Server gui DONG THOI flat fields (x_steps, yaw_delta, ...) VA movement_steps list.
+        # Chi su dung flat fields khi co, movement_steps la fallback cho truong hop
+        # server chi gui list ma khong co flat fields.
+        has_flat_steps = "x_steps" in command or "z_steps" in command
+        has_flat_rotation = "yaw_delta" in command or "pitch_delta" in command
+
         yaw_target = self._safe_float(command.get("yaw_deg"), self.hardware.current_yaw)
         pitch_target = self._safe_float(command.get("pitch_deg"), self.hardware.current_pitch)
         yaw_target += self._safe_float(command.get("yaw_delta"), 0.0)
@@ -542,28 +547,29 @@ class MainApp:
         x_dir = int(command.get("x_dir", 1))
         z_dir = int(command.get("z_dir", 1))
 
+        # Chi parse movement_steps cho cac truc CHUA co flat field de tranh nhan doi.
         movement_steps = command.get("movement_steps")
         if isinstance(movement_steps, list):
             for step in movement_steps:
                 if not isinstance(step, dict):
                     continue
                 axis = str(step.get("axis", "")).lower()
-                if axis == "pan":
+                if axis == "pan" and not has_flat_rotation:
                     yaw_target += self._safe_float(
                         step.get("delta", step.get("value", 0.0)),
                         0.0,
                     )
-                elif axis == "tilt":
+                elif axis == "tilt" and not has_flat_rotation:
                     pitch_target += self._safe_float(
                         step.get("delta", step.get("value", 0.0)),
                         0.0,
                     )
-                elif axis in {"slider_x", "x"}:
+                elif axis in {"slider_x", "x"} and not has_flat_steps:
                     delta = int(step.get("steps", step.get("delta", step.get("value", 0))))
                     x_steps += abs(delta)
                     if delta != 0:
                         x_dir = 1 if delta > 0 else -1
-                elif axis in {"slider_z", "z"}:
+                elif axis in {"slider_z", "z"} and not has_flat_steps:
                     delta = int(step.get("steps", step.get("delta", step.get("value", 0))))
                     z_steps += abs(delta)
                     if delta != 0:
