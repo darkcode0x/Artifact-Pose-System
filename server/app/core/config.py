@@ -58,6 +58,17 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _sign_int(name: str, default: int) -> int:
+    """Return +1 or -1 from env var. Any negative value → -1, else +1."""
+    raw = os.getenv(name)
+    if raw is None:
+        return 1 if default >= 0 else -1
+    try:
+        return -1 if int(raw) < 0 else 1
+    except ValueError:
+        return 1 if default >= 0 else -1
+
+
 def _csv(value: str) -> list[str]:
     if not value.strip():
         return []
@@ -100,6 +111,14 @@ class Settings:
     artifact_golden_pose: Path
 
     ack_history_limit: int
+
+    max_alignment_iterations: int
+    alignment_timeout_sec: int
+
+    sign_move_x: int
+    sign_move_z: int
+    sign_rotate_pan: int
+    sign_rotate_tilt: int
 
     @property
     def uploads_dir(self) -> Path:
@@ -192,4 +211,10 @@ def get_settings() -> Settings:
         artifact_lens_position=artifact_lens_position,
         artifact_golden_pose=Path(_env_str("ARTIFACT_GOLDEN_POSE", str(golden_pose_default))),
         ack_history_limit=max(1, _env_int("ACK_HISTORY_LIMIT", 200)),
+        max_alignment_iterations=max(1, _env_int("MAX_ALIGNMENT_ITERATIONS", 20)),
+        alignment_timeout_sec=max(10, _env_int("ALIGNMENT_TIMEOUT_SEC", 300)),
+        sign_move_x=_sign_int("SIGN_MOVE_X", -1),
+        sign_move_z=_sign_int("SIGN_MOVE_Z", -1),
+        sign_rotate_pan=_sign_int("SIGN_ROTATE_PAN", -1),
+        sign_rotate_tilt=_sign_int("SIGN_ROTATE_TILT", -1),
     )

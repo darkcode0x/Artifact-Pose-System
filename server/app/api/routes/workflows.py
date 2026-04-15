@@ -10,6 +10,7 @@ from app.schemas.workflow import (
     CaptureRequest,
     LatestCaptureMetadataResponse,
     StartAlignmentRequest,
+    StartInitializationRequest,
     TriggerCommandResponse,
 )
 from app.services.state import AppContainer
@@ -162,6 +163,35 @@ def start_alignment(
             "auto_alignment_loop": True,
         },
     )
+    container.inspection_service.reset_alignment_counter(device_id, req.artifact_id)
+    return _publish_or_queue(container, device_id, payload)
+
+
+@router.post("/workflows/{device_id}/start-initialization", response_model=TriggerCommandResponse)
+def start_initialization(
+    device_id: str,
+    req: StartInitializationRequest,
+    container: AppContainer = Depends(get_container),
+) -> TriggerCommandResponse:
+    baseline_steps = int(round(req.baseline_mm * req.steps_per_mm))
+
+    payload: dict[str, Any] = {
+        "action": "capture_stereo_pair",
+        "task_id": container.command_service.build_task_id(),
+        "artifact_id": req.artifact_id,
+        "baseline_steps": baseline_steps,
+        "baseline_mm": req.baseline_mm,
+        "steps_per_mm": req.steps_per_mm,
+        "workflow": {
+            "request_type": "start_initialization",
+            "capture_job": "golden_sample",
+        },
+    }
+
+    if isinstance(req.camera_overrides, dict):
+        for key, value in req.camera_overrides.items():
+            payload[key] = value
+
     return _publish_or_queue(container, device_id, payload)
 
 

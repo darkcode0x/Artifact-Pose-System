@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+# Resolution 4K khop voi camera_params calibration.
+DEFAULT_CAPTURE_WIDTH = 3840
+DEFAULT_CAPTURE_HEIGHT = 2160
+
 
 @dataclass
 class CaptureOutcome:
@@ -16,11 +20,83 @@ class CaptureOutcome:
 
 
 class CameraManager:
-    """Dieu khien viec chup anh 12MP voi cau hinh AF/AWB/AEC thu cong."""
+    """Dieu khien viec chup anh 4K voi cau hinh AF manual, lens co dinh."""
 
     def __init__(self, output_dir: Path) -> None:
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def capture_simple(
+        self,
+        basename: str,
+        lens_position: float = 1.5,
+        stabilize_sec: float = 1.5,
+        capture_width: int = DEFAULT_CAPTURE_WIDTH,
+        capture_height: int = DEFAULT_CAPTURE_HEIGHT,
+    ) -> Optional[CaptureOutcome]:
+        """Chup anh 4K don gian: manual AF, lens co dinh, AE/AWB tu dong.
+
+        Day la mode chinh cho workflow pose hien tai.
+        """
+        image_path = self.output_dir / f"{basename}.png"
+
+        try:
+            picamera2_module = importlib.import_module("picamera2")
+            libcamera_module = importlib.import_module("libcamera")
+            Picamera2 = getattr(picamera2_module, "Picamera2")
+            controls = getattr(libcamera_module, "controls")
+        except Exception as exc:
+            print(f"[CAM] Khong the import Picamera2/libcamera: {exc}")
+            return None
+
+        picam2 = None
+        started = False
+        try:
+            picam2 = Picamera2()
+            config = picam2.create_still_configuration(
+                main={"size": (capture_width, capture_height), "format": "RGB888"},
+            )
+            picam2.configure(config)
+            picam2.start()
+            started = True
+
+            time.sleep(max(0.0, stabilize_sec))
+
+            picam2.set_controls({
+                "AfMode": controls.AfModeEnum.Manual,
+                "LensPosition": float(lens_position),
+            })
+            time.sleep(0.5)
+
+            request = picam2.capture_request()
+            request.save("main", str(image_path))
+            try:
+                capture_meta = request.get_metadata() or {}
+            except Exception:
+                capture_meta = {}
+            request.release()
+
+            runtime_metadata = self._extract_runtime_metadata(capture_meta)
+            runtime_metadata["applied_lens_position"] = float(lens_position)
+            runtime_metadata["capture_width"] = capture_width
+            runtime_metadata["capture_height"] = capture_height
+
+            print(f"[CAM] Da chup anh 4K: {image_path}")
+            return CaptureOutcome(image_path=image_path, metadata=runtime_metadata)
+        except Exception as exc:
+            print(f"[CAM] Loi chup anh: {exc}")
+            return None
+        finally:
+            if picam2 is not None:
+                try:
+                    if started:
+                        picam2.stop()
+                except Exception:
+                    pass
+                try:
+                    picam2.close()
+                except Exception:
+                    pass
 
     def capture_high_quality(
         self,

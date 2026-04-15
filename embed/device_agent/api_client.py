@@ -132,3 +132,35 @@ class APIClient:
 	def debug_response(response: Response) -> str:
 		"""Tra ve thong tin response de debug khi can."""
 		return f"status={response.status_code}, body={response.text[:200]}"
+
+	def upload_stereo_pair(
+		self,
+		left_path: Path,
+		right_path: Path,
+	) -> Optional[Dict[str, Any]]:
+		"""Upload cap anh stereo (left, right) len /pose/initialize_golden."""
+		endpoint = "/pose/initialize_golden"
+
+		for label, path in [("left", left_path), ("right", right_path)]:
+			if not path.exists():
+				print(f"[API] Khong tim thay file {label}: {path}")
+				return None
+
+		try:
+			with left_path.open("rb") as lf, right_path.open("rb") as rf:
+				files = {
+					"left_file": (left_path.name, lf, "image/png"),
+					"right_file": (right_path.name, rf, "image/png"),
+				}
+				response = requests.post(
+					self._url(endpoint),
+					files=files,
+					timeout=max(self.config.timeout_sec, 30),
+				)
+				response.raise_for_status()
+			body = response.json()
+			print(f"[API] Upload stereo pair thanh cong: {body.get('message', '')}")
+			return body if isinstance(body, dict) else None
+		except RequestException as exc:
+			print(f"[API] Loi upload stereo pair: {exc}")
+			return None

@@ -25,10 +25,6 @@ dist/
 .eggs/
 pip-wheel-metadata/
 
-# Environment files
-.env
-.env.*
-!.env.example
 
 # IDE/editor
 .vscode/
@@ -47,7 +43,6 @@ Thumbs.db
 # Native/CMake build artifacts
 *.o
 *.obj
-*.so
 *.dll
 *.dylib
 *.a

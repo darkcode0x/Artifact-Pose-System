@@ -28,6 +28,9 @@ class InspectionService:
         self._model_service = model_service
         self._command_service = command_service
         self._mqtt_bridge = mqtt_bridge
+        # Track alignment loop iterations per (device_id, artifact_id).
+        self._alignment_counters: dict[str, int] = {}
+        self._alignment_start_ts: dict[str, float] = {}
 
     async def handle_upload(self, file: UploadFile, metadata_json: str) -> dict[str, Any]:
         metadata = self._parse_metadata(metadata_json)
@@ -224,6 +227,8 @@ class InspectionService:
                 "reason": f"capture_job_{capture_job}_no_dispatch",
             }
 
+        alignment_key = f"{device_id}:{artifact_id}"
+
         if pose_result.get("deviation") is None:
             return {
                 "ok": False,
@@ -232,12 +237,72 @@ class InspectionService:
             }
 
         deviation = pose_result.get("deviation") or {}
+
+        # --- Check within_tolerance → send alignment_complete signal ---
         if bool(deviation.get("within_tolerance", False)):
+            self._alignment_counters.pop(alignment_key, None)
+            self._alignment_start_ts.pop(alignment_key, None)
+            self._publish_alignment_signal(
+                device_id=device_id,
+                action="alignment_complete",
+                deviation=deviation,
+                artifact_id=artifact_id,
+            )
             return {
                 "ok": True,
                 "sent": False,
                 "reason": "within_tolerance",
+                "signal_sent": "alignment_complete",
             }
+
+        # --- Check loop limits ---
+        iteration = self._alignment_counters.get(alignment_key, 0) + 1
+        start_ts = self._alignment_start_ts.get(alignment_key)
+        now = time.time()
+        if start_ts is None:
+            start_ts = now
+            self._alignment_start_ts[alignment_key] = start_ts
+
+        if iteration > self._settings.max_alignment_iterations:
+            self._alignment_counters.pop(alignment_key, None)
+            self._alignment_start_ts.pop(alignment_key, None)
+            self._publish_alignment_signal(
+                device_id=device_id,
+                action="alignment_failed",
+                deviation=deviation,
+                artifact_id=artifact_id,
+                reason=f"max_iterations_exceeded ({self._settings.max_alignment_iterations})",
+                iteration=iteration - 1,
+            )
+            return {
+                "ok": False,
+                "sent": False,
+                "reason": "max_iterations_exceeded",
+                "iteration": iteration - 1,
+                "signal_sent": "alignment_failed",
+            }
+
+        elapsed = now - start_ts
+        if elapsed > self._settings.alignment_timeout_sec:
+            self._alignment_counters.pop(alignment_key, None)
+            self._alignment_start_ts.pop(alignment_key, None)
+            self._publish_alignment_signal(
+                device_id=device_id,
+                action="alignment_failed",
+                deviation=deviation,
+                artifact_id=artifact_id,
+                reason=f"timeout ({self._settings.alignment_timeout_sec}s)",
+                iteration=iteration - 1,
+            )
+            return {
+                "ok": False,
+                "sent": False,
+                "reason": "alignment_timeout",
+                "elapsed_sec": round(elapsed, 1),
+                "signal_sent": "alignment_failed",
+            }
+
+        self._alignment_counters[alignment_key] = iteration
 
         motor_command = pose_result.get("motor_command") or deviation.get("motor_command") or {}
         if not isinstance(motor_command, dict):
@@ -247,10 +312,25 @@ class InspectionService:
                 "reason": "invalid_motor_command",
             }
 
-        move_x = float(motor_command.get("move_x", 0.0) or 0.0)
-        move_z = float(motor_command.get("move_z", 0.0) or 0.0)
-        rotate_pan = float(motor_command.get("rotate_pan", 0.0) or 0.0)
-        rotate_tilt = float(motor_command.get("rotate_tilt", 0.0) or 0.0)
+        # Raw values from C++ deviation calculator
+        raw_move_x = float(motor_command.get("move_x", 0.0) or 0.0)
+        raw_move_z = float(motor_command.get("move_z", 0.0) or 0.0)
+        raw_rotate_pan = float(motor_command.get("rotate_pan", 0.0) or 0.0)
+        raw_rotate_tilt = float(motor_command.get("rotate_tilt", 0.0) or 0.0)
+
+        # Apply configurable sign multipliers (default -1 = negate deviation for correction)
+        move_x = raw_move_x * self._settings.sign_move_x
+        move_z = raw_move_z * self._settings.sign_move_z
+        rotate_pan = raw_rotate_pan * self._settings.sign_rotate_pan
+        rotate_tilt = raw_rotate_tilt * self._settings.sign_rotate_tilt
+
+        print(
+            f"[POSE_DISPATCH] iter={iteration} "
+            f"raw: x={raw_move_x:.1f} z={raw_move_z:.1f} pan={raw_rotate_pan:.3f} tilt={raw_rotate_tilt:.3f} | "
+            f"signs: x={self._settings.sign_move_x} z={self._settings.sign_move_z} "
+            f"pan={self._settings.sign_rotate_pan} tilt={self._settings.sign_rotate_tilt} | "
+            f"final: x={move_x:.1f} z={move_z:.1f} pan={rotate_pan:.3f} tilt={rotate_tilt:.3f}"
+        )
 
         movement_steps: list[dict[str, Any]] = []
         if abs(rotate_pan) > 1e-9:
@@ -366,3 +446,34 @@ class InspectionService:
             except (TypeError, ValueError):
                 continue
         return None
+
+    def reset_alignment_counter(self, device_id: str, artifact_id: str) -> None:
+        """Reset loop counter khi bat dau alignment moi."""
+        alignment_key = f"{device_id}:{artifact_id}"
+        self._alignment_counters.pop(alignment_key, None)
+        self._alignment_start_ts.pop(alignment_key, None)
+
+    def _publish_alignment_signal(
+        self,
+        *,
+        device_id: str,
+        action: str,
+        deviation: dict[str, Any],
+        artifact_id: str,
+        reason: str | None = None,
+        iteration: int | None = None,
+    ) -> None:
+        """Gui signal alignment_complete hoac alignment_failed qua MQTT toi Pi."""
+        payload: dict[str, Any] = {
+            "action": action,
+            "task_id": self._command_service.build_task_id(),
+            "device_id": device_id,
+            "artifact_id": artifact_id,
+            "deviation": deviation,
+        }
+        if reason is not None:
+            payload["reason"] = reason
+        if iteration is not None:
+            payload["iteration"] = iteration
+
+        self._mqtt_bridge.publish_command(device_id, payload)
