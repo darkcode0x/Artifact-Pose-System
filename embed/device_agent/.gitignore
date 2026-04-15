@@ -3,7 +3,6 @@ __pycache__/
 *.pyd
 
 # Local env and runtime artifacts for device agent
-.env
 mqtt_events.jsonl
 data/pictures/
 
