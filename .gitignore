@@ -103,3 +103,20 @@ client/artifact_app/macos/.symlinks/
 # Linux/Windows Flutter ephemeral
 client/artifact_app/linux/flutter/ephemeral/
 client/artifact_app/windows/flutter/ephemeral/
+
+# Datasets & weights
+*.zip
+*.pt
+yolo_dataset/
+Lable_Bouding.yolov8_*/
+datatest_20_04/
+runs/
+test/
+temp/
+analysis_output/
+__pycache__/
+
+# Docs cá nhân
+*.docx
+*.pdf
+*.png
