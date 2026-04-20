@@ -33,3 +33,9 @@ class ModelPredictResponse(BaseModel):
     ok: bool
     model_name: str
     output: Any
+
+
+class ModelDetectResponse(BaseModel):
+    ok: bool
+    model_name: str
+    output: Any
