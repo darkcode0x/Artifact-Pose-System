@@ -1,0 +1,26 @@
+# Pre-built libs cho local (ngoai Docker) - KHONG dung trong container.
+# Docker build g2o tu source trong Stage 1.
+native/libs/
+
+# Du lieu runtime - khong can trong image
+data/uploads/
+data/logs/
+data/visualization/
+
+# Env local - container dung .env.docker qua docker-compose
+.env
+.env.example
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/

@@ -1,5 +1,7 @@
-###############################################################################
 # Stage 1: Build C++ pose_solver_cpp voi libs cua container
+# g2o duoc build tu source vi Debian libg2o-dev thieu cmake config files.
+# Pin sang tag 20230806_git (= v0.2.0) de dam bao cache on dinh va khop voi
+# native/libs/ dung cho chay local (ngoai Docker).
 ###############################################################################
 FROM python:3.10-slim AS cpp-builder
 
@@ -11,13 +13,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Build g2o from source (Debian libg2o-dev khong co cmake config files)
-RUN git clone --depth 1 https://github.com/RainerKuemmerle/g2o.git /tmp/g2o \
-    && cd /tmp/g2o \
-    && mkdir build && cd build \
-    && cmake .. -DCMAKE_BUILD_TYPE=Release -DG2O_BUILD_EXAMPLES=OFF -DG2O_BUILD_APPS=OFF \
-    && make -j"$(nproc)" \
-    && make install \
+# Build g2o tu source, pin tag cu the de layer cache khong bi invalidate.
+RUN git clone --depth 1 --branch 20230806_git \
+        https://github.com/RainerKuemmerle/g2o.git /tmp/g2o \
+    && cmake -S /tmp/g2o -B /tmp/g2o/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DG2O_BUILD_EXAMPLES=OFF \
+        -DG2O_BUILD_APPS=OFF \
+    && cmake --build /tmp/g2o/build --parallel "$(nproc)" \
+    && cmake --install /tmp/g2o/build \
     && ldconfig \
     && rm -rf /tmp/g2o
 
@@ -26,11 +30,8 @@ RUN pip install pybind11[global]
 WORKDIR /build
 COPY native/pose_solver_cpp/ ./pose_solver_cpp/
 
-RUN cd pose_solver_cpp \
-    && rm -rf build \
-    && mkdir -p build && cd build \
-    && cmake .. \
-    && make -j"$(nproc)"
+RUN cmake -S pose_solver_cpp -B pose_solver_cpp/build \
+    && cmake --build pose_solver_cpp/build --parallel "$(nproc)"
 
 ###############################################################################
 # Stage 2: Runtime
