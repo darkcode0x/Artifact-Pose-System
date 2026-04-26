@@ -20,8 +20,10 @@ RUN git clone --depth 1 --branch 20230806_git \
         -DCMAKE_BUILD_TYPE=Release \
         -DG2O_BUILD_EXAMPLES=OFF \
         -DG2O_BUILD_APPS=OFF \
+        -DG2O_USE_OPENGL=OFF \
     && cmake --build /tmp/g2o/build --parallel "$(nproc)" \
     && cmake --install /tmp/g2o/build \
+    && sed -i '/find_dependency.*OpenGL/d' /usr/local/lib/cmake/g2o/g2oConfig.cmake \
     && ldconfig \
     && rm -rf /tmp/g2o
 
