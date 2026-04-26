@@ -39,13 +39,6 @@ struct DeviationConfig {
     bool sequentialMode = true;     // If true: when both trans+rot needed, send
                                     // translation first; rotation on next iteration
     double stepsPerMm = 860.0;      // Stepper motor steps per mm
-
-    int signX = 1;
-    int signY = 1;
-    int signZ = 1;
-    int signPan = 1;
-    int signTilt = 1;
-    int signRoll = 1;
 };
 
 class DeviationCalculator {

@@ -1,7 +1,3 @@
-# Pre-built libs cho local (ngoai Docker) - KHONG dung trong container.
-# Docker build g2o tu source trong Stage 1.
-native/libs/
-
 # Du lieu runtime - khong can trong image
 data/uploads/
 data/logs/

@@ -51,9 +51,9 @@ PoseDeviation DeviationCalculator::calculate(
     PoseDeviation dev;
     Vector3d T_diff = T_current - T_golden;
 
-    dev.deltaX = T_diff.x() * config_.signX;
-    dev.deltaY = T_diff.y() * config_.signY;
-    dev.deltaZ = T_diff.z() * config_.signZ;
+    dev.deltaX = T_diff.x();
+    dev.deltaY = T_diff.y();
+    dev.deltaZ = T_diff.z();
 
     dev.translationMag = T_diff.norm();
 
@@ -64,9 +64,9 @@ PoseDeviation DeviationCalculator::calculate(
     double roll, pitch, yaw;
     rotationToEuler(R_diff, roll, pitch, yaw);
 
-    dev.deltaTilt = roll * config_.signTilt;  
-    dev.deltaPan = pitch * config_.signPan;
-    dev.deltaRoll = yaw * config_.signRoll;
+    dev.deltaTilt = roll;
+    dev.deltaPan  = pitch;
+    dev.deltaRoll = yaw;
 
     dev.rotationMag = sqrt(dev.deltaPan * dev.deltaPan +
                            dev.deltaTilt * dev.deltaTilt +
