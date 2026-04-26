@@ -80,8 +80,13 @@ DIAMOND_OBJ_PTS = np.array(
     dtype=np.float32,
 )
 
-TRANS_TOLERANCE = 0.005
-ROT_TOLERANCE = 0.5
+TRANS_TOLERANCE = 0.010  # 10mm  (stepper precision)
+ROT_TOLERANCE = 1.0      # 1.0°  (servo min step = 1°)
+
+# Motor hardware constants
+SERVO_MIN_DEG = 1.0      # Minimum servo rotation step (degrees)
+SEQUENTIAL_MODE = True   # Translation first, rotation on next iteration
+STEPS_PER_MM = 860.0     # Stepper motor steps per mm
 
 
 def _as_path(value: str | Path | None, default: Path) -> Path:

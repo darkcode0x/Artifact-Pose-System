@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from fastapi import UploadFile
@@ -31,6 +32,7 @@ class InspectionService:
         # Track alignment loop iterations per (device_id, artifact_id).
         self._alignment_counters: dict[str, int] = {}
         self._alignment_start_ts: dict[str, float] = {}
+        self._alignment_lock = Lock()
 
     async def handle_upload(self, file: UploadFile, metadata_json: str) -> dict[str, Any]:
         metadata = self._parse_metadata(metadata_json)
@@ -240,8 +242,9 @@ class InspectionService:
 
         # --- Check within_tolerance → send alignment_complete signal ---
         if bool(deviation.get("within_tolerance", False)):
-            self._alignment_counters.pop(alignment_key, None)
-            self._alignment_start_ts.pop(alignment_key, None)
+            with self._alignment_lock:
+                self._alignment_counters.pop(alignment_key, None)
+                self._alignment_start_ts.pop(alignment_key, None)
             self._publish_alignment_signal(
                 device_id=device_id,
                 action="alignment_complete",
@@ -256,16 +259,18 @@ class InspectionService:
             }
 
         # --- Check loop limits ---
-        iteration = self._alignment_counters.get(alignment_key, 0) + 1
-        start_ts = self._alignment_start_ts.get(alignment_key)
-        now = time.time()
-        if start_ts is None:
-            start_ts = now
-            self._alignment_start_ts[alignment_key] = start_ts
+        with self._alignment_lock:
+            iteration = self._alignment_counters.get(alignment_key, 0) + 1
+            start_ts = self._alignment_start_ts.get(alignment_key)
+            now = time.time()
+            if start_ts is None:
+                start_ts = now
+                self._alignment_start_ts[alignment_key] = start_ts
 
         if iteration > self._settings.max_alignment_iterations:
-            self._alignment_counters.pop(alignment_key, None)
-            self._alignment_start_ts.pop(alignment_key, None)
+            with self._alignment_lock:
+                self._alignment_counters.pop(alignment_key, None)
+                self._alignment_start_ts.pop(alignment_key, None)
             self._publish_alignment_signal(
                 device_id=device_id,
                 action="alignment_failed",
@@ -284,8 +289,9 @@ class InspectionService:
 
         elapsed = now - start_ts
         if elapsed > self._settings.alignment_timeout_sec:
-            self._alignment_counters.pop(alignment_key, None)
-            self._alignment_start_ts.pop(alignment_key, None)
+            with self._alignment_lock:
+                self._alignment_counters.pop(alignment_key, None)
+                self._alignment_start_ts.pop(alignment_key, None)
             self._publish_alignment_signal(
                 device_id=device_id,
                 action="alignment_failed",
@@ -302,7 +308,8 @@ class InspectionService:
                 "signal_sent": "alignment_failed",
             }
 
-        self._alignment_counters[alignment_key] = iteration
+        with self._alignment_lock:
+            self._alignment_counters[alignment_key] = iteration
 
         motor_command = pose_result.get("motor_command") or deviation.get("motor_command") or {}
         if not isinstance(motor_command, dict):
@@ -317,6 +324,16 @@ class InspectionService:
         raw_move_z = float(motor_command.get("move_z", 0.0) or 0.0)
         raw_rotate_pan = float(motor_command.get("rotate_pan", 0.0) or 0.0)
         raw_rotate_tilt = float(motor_command.get("rotate_tilt", 0.0) or 0.0)
+
+        # Guard: all-zero motor command means C++ unavailable (fallback mode).
+        # Sending a zero-move would waste alignment iterations.
+        if (abs(raw_move_x) < 1e-9 and abs(raw_move_z) < 1e-9
+                and abs(raw_rotate_pan) < 1e-9 and abs(raw_rotate_tilt) < 1e-9):
+            return {
+                "ok": False,
+                "sent": False,
+                "reason": "zero_motor_command_cpp_unavailable",
+            }
 
         # Apply configurable sign multipliers (default -1 = negate deviation for correction)
         move_x = raw_move_x * self._settings.sign_move_x
@@ -450,8 +467,9 @@ class InspectionService:
     def reset_alignment_counter(self, device_id: str, artifact_id: str) -> None:
         """Reset loop counter khi bat dau alignment moi."""
         alignment_key = f"{device_id}:{artifact_id}"
-        self._alignment_counters.pop(alignment_key, None)
-        self._alignment_start_ts.pop(alignment_key, None)
+        with self._alignment_lock:
+            self._alignment_counters.pop(alignment_key, None)
+            self._alignment_start_ts.pop(alignment_key, None)
 
     def _publish_alignment_signal(
         self,

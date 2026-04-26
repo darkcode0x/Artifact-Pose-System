@@ -11,6 +11,9 @@ from .common import (
     DIAMOND_OBJ_PTS,
     HAS_CPP,
     ROT_TOLERANCE,
+    SEQUENTIAL_MODE,
+    SERVO_MIN_DEG,
+    STEPS_PER_MM,
     TRANS_TOLERANCE,
     detect_diamond,
     extract_orb,
@@ -119,6 +122,9 @@ def run_correction_step(image: Any, K: Any, D: Any, golden_pose: dict[str, Any])
             tvec_final.tolist(),
             TRANS_TOLERANCE,
             ROT_TOLERANCE,
+            SERVO_MIN_DEG,
+            SEQUENTIAL_MODE,
+            STEPS_PER_MM,
         )
     else:
         delta_t = tvec_final - golden_pose["tvec"]
@@ -139,6 +145,8 @@ def run_correction_step(image: Any, K: Any, D: Any, golden_pose: dict[str, Any])
             yaw = 0.0
 
         rot_mag = float(np.sqrt(roll**2 + pitch**2 + yaw**2))
+        within_trans = trans_mag < TRANS_TOLERANCE
+        within_rot = rot_mag < ROT_TOLERANCE
         deviation = {
             "delta_x": float(delta_t[0]),
             "delta_y": float(delta_t[1]),
@@ -148,7 +156,9 @@ def run_correction_step(image: Any, K: Any, D: Any, golden_pose: dict[str, Any])
             "delta_roll": yaw,
             "translation_mag": trans_mag,
             "rotation_mag": rot_mag,
-            "within_tolerance": trans_mag < TRANS_TOLERANCE and rot_mag < ROT_TOLERANCE,
+            "within_tolerance": within_trans and within_rot,
+            "within_trans_tolerance": within_trans,
+            "within_rot_tolerance": within_rot,
             "motor_command": {
                 "move_x": 0,
                 "move_z": 0,

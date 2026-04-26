@@ -57,14 +57,14 @@ class PoseService:
         }
 
     def correct_image(self, image_path: Path) -> dict[str, Any]:
-        K, D = pose_common.load_camera_params(str(self._settings.artifact_camera_params))
+        K, D = pose_common.load_camera_params(self._settings.artifact_camera_params)
         if K is None:
             raise RuntimeError(f"Camera params not found: {self._settings.artifact_camera_params}")
 
         if not self._settings.artifact_golden_pose.exists():
             raise RuntimeError(f"Golden pose not found: {self._settings.artifact_golden_pose}")
 
-        golden_pose = pose_common.load_golden_pose(str(self._settings.artifact_golden_pose))
+        golden_pose = pose_common.load_golden_pose(self._settings.artifact_golden_pose)
         if golden_pose is None:
             raise RuntimeError(f"Golden pose not found: {self._settings.artifact_golden_pose}")
 
@@ -83,7 +83,7 @@ class PoseService:
         left_image_path: Path,
         right_image_path: Path,
     ) -> dict[str, Any]:
-        K, D = pose_common.load_camera_params(str(self._settings.artifact_camera_params))
+        K, D = pose_common.load_camera_params(self._settings.artifact_camera_params)
         if K is None:
             raise RuntimeError(f"Camera params not found: {self._settings.artifact_camera_params}")
 

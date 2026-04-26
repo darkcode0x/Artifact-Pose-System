@@ -30,8 +30,15 @@ struct PoseDeviation {
 };
 
 struct DeviationConfig {
-    double transTolerance = 0.005;  
-    double rotTolerance = 0.5;
+    double transTolerance = 0.010;  // 10mm — relaxed to match hardware precision
+    double rotTolerance = 1.0;      // 1.0 deg — must be >= servo minimum step
+
+    // Motor hardware constraints
+    double servoMinDeg = 1.0;       // Minimum servo step (degrees); angles smaller
+                                    // than half this are zeroed (dead zone)
+    bool sequentialMode = true;     // If true: when both trans+rot needed, send
+                                    // translation first; rotation on next iteration
+    double stepsPerMm = 860.0;      // Stepper motor steps per mm
 
     int signX = 1;
     int signY = 1;
@@ -96,9 +103,16 @@ struct MotorCommand {
     // Priority: 0 = no movement, 1 = translation, 2 = rotation, 3 = both
 };
 
+// Apply hardware constraints and compute motor steps.
+// - Rotation angles are rounded to nearest servoMinDeg; angles in the
+//   dead zone (|angle| < 0.5 * servoMinDeg) are zeroed.
+// - Sequential mode: when both translation and rotation are needed,
+//   only translation is sent this step (rotation deferred to next iteration).
 MotorCommand deviationToMotorCommand(
     const PoseDeviation& dev,
-    double stepsPerMm = 860.0   // Stepper motor steps/mm
+    double stepsPerMm    = 860.0,  // Stepper motor steps/mm
+    double servoMinDeg   = 1.0,    // Minimum servo step (degrees)
+    bool   sequentialMode = true   // Translation-first priority
 );
 
 #endif
