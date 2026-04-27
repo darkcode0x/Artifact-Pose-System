@@ -116,6 +116,15 @@ temp/
 analysis_output/
 __pycache__/
 
+# AI module local artifacts
+ai_module/data/
+ai_module/snapshots/
+ai_module/pipeline_output/
+
+# Server secrets (use .env.example as template)
+server/.env
+server/.env.docker
+
 # Docs cá nhân
 *.docx
 *.pdf
