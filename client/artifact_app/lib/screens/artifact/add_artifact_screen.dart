@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
-import '../../models/artifact.dart';
+import 'package:provider/provider.dart';
+
+import '../../models/artifact_status.dart';
+import '../../providers/artifact_provider.dart';
+import '../../widgets/responsive_scaffold.dart';
 
 class AddArtifactScreen extends StatefulWidget {
-
   const AddArtifactScreen({super.key});
 
   @override
@@ -10,184 +13,125 @@ class AddArtifactScreen extends StatefulWidget {
 }
 
 class _AddArtifactScreenState extends State<AddArtifactScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _locationController = TextEditingController();
+  final _descriptionController = TextEditingController();
 
-  final nameController = TextEditingController();
-  final locationController = TextEditingController();
-  final descriptionController = TextEditingController();
+  ArtifactStatus _status = ArtifactStatus.good;
+  bool _isSaving = false;
 
-  String status = "good";
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _locationController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isSaving = true);
+    final created = await context.read<ArtifactProvider>().create(
+          name: _nameController.text.trim(),
+          description: _descriptionController.text.trim(),
+          location: _locationController.text.trim(),
+        );
+    if (!mounted) return;
+    setState(() => _isSaving = false);
+    if (created == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not create artifact')),
+      );
+      return;
+    }
+    Navigator.pop(context, true);
+  }
 
   @override
   Widget build(BuildContext context) {
-
     return Scaffold(
-
-      backgroundColor: const Color(0xFFE9ECE7),
-
-      appBar: AppBar(
-        title: const Text("Add Artifact"),
-        backgroundColor: const Color(0xFF1E3A1F),
-      ),
-
-      body: Padding(
-
-        padding: const EdgeInsets.all(20),
-
-        child: Column(
-
-          crossAxisAlignment: CrossAxisAlignment.start,
-
-          children: [
-
-            // ===== NAME =====
-
-            const Text(
-              "Artifact Name",
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-
-            const SizedBox(height: 8),
-
-            TextField(
-              controller: nameController,
-              decoration: InputDecoration(
-                hintText: "Enter artifact name",
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // ===== DESCRIPTION =====
-
-            const Text(
-              "Description",
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-
-            const SizedBox(height: 8),
-
-            TextField(
-              controller: descriptionController,
-              maxLines: 3,
-              decoration: InputDecoration(
-                hintText: "Artifact description",
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // ===== LOCATION =====
-
-            const Text(
-              "Location",
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-
-            const SizedBox(height: 8),
-
-            TextField(
-              controller: locationController,
-              decoration: InputDecoration(
-                hintText: "Room / Display case",
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // ===== STATUS =====
-
-            const Text(
-              "Status",
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-
-            const SizedBox(height: 8),
-
-            DropdownButtonFormField(
-
-              value: status,
-
-              items: const [
-
-                DropdownMenuItem(
-                    value: "good",
-                    child: Text("Good")),
-
-                DropdownMenuItem(
-                    value: "need_check",
-                    child: Text("Need Check")),
-
-                DropdownMenuItem(
-                    value: "warning",
-                    child: Text("Warning")),
-              ],
-
-              onChanged: (value) {
-
-                setState(() {
-                  status = value!;
-                });
-
-              },
-
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-
-            const Spacer(),
-
-            // ===== ADD BUTTON =====
-
-            SizedBox(
-
-              width: double.infinity,
-              height: 50,
-
-              child: ElevatedButton(
-
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1E3A1F),
+      appBar: AppBar(title: const Text('Add Artifact')),
+      body: SafeArea(
+        child: ResponsiveBody(
+          padding: const EdgeInsets.all(16),
+          child: Form(
+            key: _formKey,
+            child: ListView(
+              children: [
+                TextFormField(
+                  controller: _nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Artifact name',
+                    prefixIcon: Icon(Icons.label_outline),
+                  ),
+                  validator: (v) =>
+                      (v == null || v.trim().isEmpty) ? 'Please enter a name' : null,
                 ),
-
-                onPressed: () {
-
-                  if (nameController.text.isEmpty) {
-                    return;
-                  }
-
-                  Artifact newArtifact = Artifact(
-
-                    name: nameController.text,
-                    status: status,
-                    hasImage: false,
-                    description: descriptionController.text,
-                    location: locationController.text,
-
-                  );
-
-                  Navigator.pop(context, newArtifact);
-                },
-
-                child: const Text("Add Artifact"),
-              ),
-            )
-          ],
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _descriptionController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Description',
+                    alignLabelWithHint: true,
+                    prefixIcon: Icon(Icons.description_outlined),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _locationController,
+                  decoration: const InputDecoration(
+                    labelText: 'Location',
+                    prefixIcon: Icon(Icons.place_outlined),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                DropdownButtonFormField<ArtifactStatus>(
+                  value: _status,
+                  items: const [
+                    DropdownMenuItem(
+                      value: ArtifactStatus.good,
+                      child: Text('Good'),
+                    ),
+                    DropdownMenuItem(
+                      value: ArtifactStatus.needCheck,
+                      child: Text('Need Check'),
+                    ),
+                    DropdownMenuItem(
+                      value: ArtifactStatus.warning,
+                      child: Text('Warning'),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setState(() => _status = v);
+                  },
+                  decoration: const InputDecoration(
+                    labelText: 'Initial status',
+                    prefixIcon: Icon(Icons.flag_outlined),
+                  ),
+                ),
+                const SizedBox(height: 28),
+                SizedBox(
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    onPressed: _isSaving ? null : _save,
+                    icon: _isSaving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Icon(Icons.check),
+                    label: const Text('Save artifact'),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

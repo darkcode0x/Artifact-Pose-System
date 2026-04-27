@@ -1,95 +1,97 @@
 import 'package:flutter/material.dart';
 
+import '../../widgets/responsive_scaffold.dart';
+
+/// NOTE: backend currently has no /users CRUD; this screen is a UI placeholder.
 class AddUserScreen extends StatefulWidget {
-  const AddUserScreen({Key? key}) : super(key: key);
+  const AddUserScreen({super.key});
 
   @override
   State<AddUserScreen> createState() => _AddUserScreenState();
 }
 
 class _AddUserScreenState extends State<AddUserScreen> {
-  final TextEditingController usernameController = TextEditingController();
-  final TextEditingController passwordController = TextEditingController();
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  String _selectedRole = 'user';
 
-  String selectedRole = "user";
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
 
-  void handleAddUser() {
-    if (usernameController.text.isEmpty ||
-        passwordController.text.isEmpty) {
+  void _handleAddUser() {
+    if (_usernameController.text.isEmpty ||
+        _passwordController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please fill all fields")),
+        const SnackBar(content: Text('Please fill all fields')),
       );
       return;
     }
-
-    // Fake success for now
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("User created successfully")),
+      const SnackBar(
+        content: Text(
+          'User CRUD endpoint is not implemented on the server yet.',
+        ),
+      ),
     );
-
     Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text("Add User"),
-        backgroundColor: const Color(0xFF1E3A1F),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            _buildInput("Username", usernameController),
-            const SizedBox(height: 16),
-            _buildInput("Password", passwordController, obscure: true),
-            const SizedBox(height: 16),
-
-            DropdownButtonFormField<String>(
-              value: selectedRole,
-              items: const [
-                DropdownMenuItem(value: "user", child: Text("User")),
-                DropdownMenuItem(value: "admin", child: Text("Admin")),
-              ],
-              onChanged: (value) {
-                setState(() {
-                  selectedRole = value!;
-                });
-              },
-              decoration: const InputDecoration(
-                labelText: "Role",
-                border: OutlineInputBorder(),
-              ),
-            ),
-
-            const Spacer(),
-
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton(
-                onPressed: handleAddUser,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1E3A1F),
+      appBar: AppBar(title: const Text('Add user')),
+      body: SafeArea(
+        child: ResponsiveBody(
+          padding: const EdgeInsets.all(16),
+          child: ListView(
+            children: [
+              TextField(
+                controller: _usernameController,
+                decoration: const InputDecoration(
+                  labelText: 'Username',
+                  prefixIcon: Icon(Icons.person_outline),
                 ),
-                child: const Text("Create User"),
               ),
-            )
-          ],
+              const SizedBox(height: 14),
+              TextField(
+                controller: _passwordController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'Password',
+                  prefixIcon: Icon(Icons.lock_outline),
+                ),
+              ),
+              const SizedBox(height: 14),
+              DropdownButtonFormField<String>(
+                value: _selectedRole,
+                items: const [
+                  DropdownMenuItem(value: 'user', child: Text('User')),
+                  DropdownMenuItem(value: 'admin', child: Text('Admin')),
+                ],
+                onChanged: (v) {
+                  if (v != null) setState(() => _selectedRole = v);
+                },
+                decoration: const InputDecoration(
+                  labelText: 'Role',
+                  prefixIcon: Icon(Icons.shield_outlined),
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                height: 50,
+                child: ElevatedButton.icon(
+                  onPressed: _handleAddUser,
+                  icon: const Icon(Icons.person_add_alt_1),
+                  label: const Text('Create user'),
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildInput(String label, TextEditingController controller,
-      {bool obscure = false}) {
-    return TextField(
-      controller: controller,
-      obscureText: obscure,
-      decoration: InputDecoration(
-        labelText: label,
-        border: const OutlineInputBorder(),
       ),
     );
   }

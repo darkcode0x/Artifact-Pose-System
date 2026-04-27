@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
-import '../../services/museum_service.dart';
-import '../../models/schedule.dart';
-import 'schedule_detail_screen.dart';
+import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
+import '../../models/schedule.dart';
+import '../../providers/schedule_provider.dart';
+import '../../theme.dart';
+import '../../widgets/responsive_scaffold.dart';
+import 'schedule_detail_screen.dart';
 
 class ScheduleScreen extends StatefulWidget {
   const ScheduleScreen({super.key});
@@ -12,121 +16,112 @@ class ScheduleScreen extends StatefulWidget {
 }
 
 class _ScheduleScreenState extends State<ScheduleScreen> {
-
-  final service = MuseumService();
-
-  DateTime selectedDate = DateTime.now();
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<ScheduleProvider>().refresh();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    final provider = context.watch<ScheduleProvider>();
+    final schedulesToday = provider.forSelectedDate();
 
     return Scaffold(
-
-      backgroundColor: const Color(0xFFE9ECE7),
-
-      appBar: AppBar(
-        title: const Text("Inspection Schedule"),
-        backgroundColor: const Color(0xFF1E3A1F),
-      ),
-
-      body: Column(
-
-        children: [
-
-          const SizedBox(height: 10),
-
-          _dateSelector(),
-
-          const SizedBox(height: 10),
-
-          Expanded(
-            child: _scheduleList(),
-          )
-        ],
+      appBar: AppBar(title: const Text('Inspection Schedule')),
+      body: RefreshIndicator(
+        onRefresh: () => context.read<ScheduleProvider>().refresh(),
+        child: ResponsiveBody(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              _DateSelector(
+                selected: provider.selectedDate,
+                onChanged: (d) => context
+                    .read<ScheduleProvider>()
+                    .selectDate(d),
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: schedulesToday.isEmpty
+                    ? const EmptyStateView(
+                        icon: Icons.event_busy_outlined,
+                        title: 'No inspection scheduled',
+                      )
+                    : ListView.separated(
+                        itemCount: schedulesToday.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: 12),
+                        itemBuilder: (context, index) =>
+                            _ScheduleItem(schedule: schedulesToday[index]),
+                      ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
+}
 
-  // ================= DATE SELECTOR =================
+class _DateSelector extends StatelessWidget {
+  final DateTime selected;
+  final ValueChanged<DateTime> onChanged;
 
-  Widget _dateSelector() {
+  const _DateSelector({required this.selected, required this.onChanged});
 
-    List<DateTime> days = List.generate(
-        7,
-            (index) => DateTime.now().add(Duration(days: index))
+  @override
+  Widget build(BuildContext context) {
+    final today = DateTime.now();
+    final start = DateTime(today.year, today.month, today.day);
+    final days = List<DateTime>.generate(
+      14,
+      (i) => start.add(Duration(days: i)),
     );
 
     return SizedBox(
-
-      height: 90,
-
-      child: ListView.builder(
-
+      height: 84,
+      child: ListView.separated(
         scrollDirection: Axis.horizontal,
-
         itemCount: days.length,
-
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
-
-          DateTime day = days[index];
-
-          bool selected =
-              day.day == selectedDate.day &&
-                  day.month == selectedDate.month;
-
-          return GestureDetector(
-
-            onTap: () {
-
-              setState(() {
-                selectedDate = day;
-              });
-
-            },
-
+          final d = days[index];
+          final isSelected = d.year == selected.year &&
+              d.month == selected.month &&
+              d.day == selected.day;
+          return InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => onChanged(d),
             child: Container(
-
-              width: 70,
-
-              margin: const EdgeInsets.symmetric(horizontal: 6),
-
+              width: 64,
               decoration: BoxDecoration(
-
-                color: selected
-                    ? const Color(0xFF1E3A1F)
-                    : Colors.white,
-
-                borderRadius: BorderRadius.circular(15),
-
+                color: isSelected ? AppColors.primary : AppColors.surface,
+                borderRadius: BorderRadius.circular(14),
               ),
-
               child: Column(
-
                 mainAxisAlignment: MainAxisAlignment.center,
-
                 children: [
-
                   Text(
-                    "${day.day}",
+                    DateFormat('E').format(d),
                     style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: selected
-                          ? Colors.white
-                          : Colors.black,
+                      color: isSelected
+                          ? Colors.white70
+                          : AppColors.textMuted,
+                      fontSize: 12,
                     ),
                   ),
-
+                  const SizedBox(height: 4),
                   Text(
-                    ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-                    [day.weekday - 1],
-
+                    '${d.day}',
                     style: TextStyle(
-                      color: selected
-                          ? Colors.white
-                          : Colors.black54,
+                      color: isSelected ? Colors.white : Colors.black87,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
                     ),
-                  )
+                  ),
                 ],
               ),
             ),
@@ -135,95 +130,44 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       ),
     );
   }
+}
 
-  // ================= LIST =================
+class _ScheduleItem extends StatelessWidget {
+  final Schedule schedule;
+  const _ScheduleItem({required this.schedule});
 
-  Widget _scheduleList() {
-
-    List<Schedule> schedules =
-    service.getScheduleByDate(selectedDate);
-
-    if (schedules.isEmpty) {
-
-      return const Center(
-        child: Text("No inspection scheduled"),
-      );
-    }
-
-    return ListView.builder(
-
-      padding: const EdgeInsets.all(15),
-
-      itemCount: schedules.length,
-
-      itemBuilder: (context, index) {
-
-        return _scheduleItem(schedules[index]);
-
-      },
-    );
-  }
-
-  // ================= ITEM =================
-
-  Widget _scheduleItem(Schedule schedule) {
-
-    return GestureDetector(
-
-      onTap: () {
-
-        Navigator.push(
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        leading: Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: AppColors.primary.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(Icons.event_note, color: AppColors.primary),
+        ),
+        title: Text(
+          schedule.artifactName ?? 'Artifact #${schedule.artifactId}',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        subtitle: Text(
+          '${schedule.scheduledTime} • ${schedule.operatorUsername.isEmpty ? 'Unassigned' : schedule.operatorUsername}',
+        ),
+        trailing: schedule.completed
+            ? const Icon(Icons.check_circle,
+                color: AppColors.statusGood)
+            : const Icon(Icons.chevron_right,
+                color: AppColors.textMuted),
+        onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) =>
-                ScheduleDetailScreen(schedule: schedule),
+            builder: (_) => ScheduleDetailScreen(schedule: schedule),
           ),
-        );
-      },
-
-      child: Container(
-
-        margin: const EdgeInsets.only(bottom: 15),
-
-        padding: const EdgeInsets.all(15),
-
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-        ),
-
-        child: Row(
-
-          children: [
-
-            const Icon(
-              Icons.event_note,
-              size: 30,
-              color: Color(0xFF1E3A1F),
-            ),
-
-            const SizedBox(width: 15),
-
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-
-                  Text(
-                    schedule.artifactName,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold),
-                  ),
-
-                  Text("Time: ${schedule.time}"),
-
-                  Text("Operator: ${schedule.operator}"),
-                ],
-              ),
-            ),
-
-            const Icon(Icons.chevron_right)
-          ],
         ),
       ),
     );

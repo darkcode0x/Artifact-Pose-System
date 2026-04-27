@@ -1,223 +1,149 @@
 import 'package:flutter/material.dart';
-import '../../services/auth_service.dart';
-import '../../models/login_response.dart';
-import '../dashboard/dashboard_screen.dart';
+import 'package:provider/provider.dart';
+
+import '../../providers/auth_provider.dart';
+import '../../services/api_client.dart';
+import '../../theme.dart';
+import '../../widgets/responsive_scaffold.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({Key? key}) : super(key: key);
+  const LoginScreen({super.key});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
 
-  final TextEditingController usernameController = TextEditingController();
-  final TextEditingController passwordController = TextEditingController();
+  bool _isLoading = false;
+  bool _obscurePassword = true;
 
-  bool isLoading = false;
-  bool isPasswordHidden = true;
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
 
-  Future<void> handleLogin() async {
-    if (usernameController.text.isEmpty ||
-        passwordController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please enter username and password")),
-      );
-      return;
-    }
+  Future<void> _handleLogin() async {
+    if (!_formKey.currentState!.validate()) return;
 
-    setState(() => isLoading = true);
-
+    setState(() => _isLoading = true);
     try {
-      final result = await AuthService.login(
-        usernameController.text.trim(),
-        passwordController.text.trim(),
-      );
-
-      // 👉 điều hướng theo role
-      if (result.role == "admin") {
-        Navigator.pushReplacementNamed(context, "/admin");
-      } else {
-        Navigator.pushReplacementNamed(context, "/operator");
-      }
-
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Invalid username or password")),
-      );
+      await context.read<AuthProvider>().login(
+            _usernameController.text.trim(),
+            _passwordController.text,
+          );
+      // AuthGate will switch screen automatically.
+    } on ApiException catch (e) {
+      if (mounted) _showError(e.message);
+    } catch (_) {
+      if (mounted) _showError('Could not connect to server');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
 
-    setState(() => isLoading = false);
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFE9ECE7),
+      backgroundColor: AppColors.surfaceMuted,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: Column(
-            children: [
-
-              const SizedBox(height: 40),
-
-              Align(
-                alignment: Alignment.centerLeft,
-                child: CircleAvatar(
-                  backgroundColor: Colors.white,
-                  child: IconButton(
-                    icon: const Icon(Icons.arrow_back),
-                    onPressed: () => Navigator.pop(context),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+          child: ResponsiveBody(
+            padding: EdgeInsets.zero,
+            child: Form(
+              key: _formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 40),
+                  const Icon(
+                    Icons.museum,
+                    size: 64,
+                    color: AppColors.primary,
                   ),
-                ),
-              ),
-
-              const SizedBox(height: 40),
-
-              const Text(
-                "Hello Again!",
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF1E3A1F),
-                ),
-              ),
-
-              const SizedBox(height: 8),
-
-              const Text(
-                "Welcome back. Please sign in to continue.",
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.black54,
-                ),
-              ),
-
-              const SizedBox(height: 50),
-
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  "Username",
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF1E3A1F),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 8),
-
-              _buildInputField(
-                controller: usernameController,
-                hint: "Enter username",
-                obscure: false,
-              ),
-
-              const SizedBox(height: 24),
-
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  "Password",
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF1E3A1F),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 8),
-
-              _buildInputField(
-                controller: passwordController,
-                hint: "Enter password",
-                obscure: isPasswordHidden,
-                suffixIcon: IconButton(
-                  icon: Icon(
-                    isPasswordHidden
-                        ? Icons.visibility_off
-                        : Icons.visibility,
-                  ),
-                  onPressed: () {
-                    setState(() {
-                      isPasswordHidden = !isPasswordHidden;
-                    });
-                  },
-                ),
-              ),
-
-              const SizedBox(height: 12),
-
-              const Align(
-                alignment: Alignment.centerRight,
-                child: Text(
-                  "Recovery Password",
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.black45,
-                  ),
-                ),
-              ),
-
-              const Spacer(),
-
-              SizedBox(
-                width: double.infinity,
-                height: 55,
-                child: ElevatedButton(
-                  onPressed: isLoading ? null : handleLogin,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1E3A1F),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                  ),
-                  child: isLoading
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text(
-                    "Sign In",
+                  const SizedBox(height: 24),
+                  const Text(
+                    'Hello again',
+                    textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primary,
                     ),
                   ),
-                ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Sign in to continue monitoring artifacts.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AppColors.textMuted),
+                  ),
+                  const SizedBox(height: 36),
+                  TextFormField(
+                    controller: _usernameController,
+                    autofillHints: const [AutofillHints.username],
+                    textInputAction: TextInputAction.next,
+                    decoration: const InputDecoration(
+                      labelText: 'Username',
+                      prefixIcon: Icon(Icons.person_outline),
+                    ),
+                    validator: (v) => (v == null || v.trim().isEmpty)
+                        ? 'Please enter your username'
+                        : null,
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _passwordController,
+                    obscureText: _obscurePassword,
+                    autofillHints: const [AutofillHints.password],
+                    textInputAction: TextInputAction.done,
+                    onFieldSubmitted: (_) => _handleLogin(),
+                    decoration: InputDecoration(
+                      labelText: 'Password',
+                      prefixIcon: const Icon(Icons.lock_outline),
+                      suffixIcon: IconButton(
+                        icon: Icon(_obscurePassword
+                            ? Icons.visibility_off
+                            : Icons.visibility),
+                        onPressed: () => setState(
+                            () => _obscurePassword = !_obscurePassword),
+                      ),
+                    ),
+                    validator: (v) =>
+                        (v == null || v.isEmpty) ? 'Please enter your password' : null,
+                  ),
+                  const SizedBox(height: 32),
+                  SizedBox(
+                    height: 52,
+                    child: ElevatedButton(
+                      onPressed: _isLoading ? null : _handleLogin,
+                      child: _isLoading
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : const Text('Sign In'),
+                    ),
+                  ),
+                ],
               ),
-
-              const SizedBox(height: 30),
-
-            ],
+            ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInputField({
-    required TextEditingController controller,
-    required String hint,
-    required bool obscure,
-    Widget? suffixIcon,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(30),
-      ),
-      child: TextField(
-        controller: controller,
-        obscureText: obscure,
-        decoration: InputDecoration(
-          hintText: hint,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 20,
-            vertical: 18,
-          ),
-          border: InputBorder.none,
-          suffixIcon: suffixIcon,
         ),
       ),
     );
