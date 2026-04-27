@@ -50,7 +50,9 @@ services:
       RUN_POSE_ON_UPLOAD: ${RUN_POSE_ON_UPLOAD:-true}
       RUN_AI_ON_UPLOAD: ${RUN_AI_ON_UPLOAD:-false}
       AUTO_DISPATCH_POSE_COMMAND: ${AUTO_DISPATCH_POSE_COMMAND:-true}
-      AUTH_DATABASE_URL: ${AUTH_DATABASE_URL:-postgresql+psycopg://artifact:artifact123@postgres:5432/artifact_auth}
+      # Hardcode postgres service hostname — do not use ${AUTH_DATABASE_URL} substitution
+      # because server/.env (dung cho local) dung 127.0.0.1 se ghi de va lam mat ket noi.
+      AUTH_DATABASE_URL: postgresql+psycopg://artifact:${POSTGRES_PASSWORD:-artifact123}@postgres:5432/${POSTGRES_DB:-artifact_auth}
       MQTT_HOST: ${MQTT_HOST:-mosquitto}
       MQTT_PORT: ${MQTT_PORT:-1883}
       MQTT_KEEPALIVE_SEC: ${MQTT_KEEPALIVE_SEC:-60}
