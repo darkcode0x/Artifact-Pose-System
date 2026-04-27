@@ -73,12 +73,22 @@ class InspectionService:
                 )
 
         ai_result: dict[str, Any] | None = None
-        if self._settings.run_ai_on_upload:
+        # Run AI on the final aligned image when alignment succeeds (within_tolerance=True).
+        alignment_complete = (
+            pose_result is not None
+            and isinstance(pose_result.get("deviation"), dict)
+            and bool(pose_result["deviation"].get("within_tolerance", False))
+        )
+        if self._settings.run_ai_on_aligned_image and alignment_complete:
+            aligned_png = self._save_aligned_png(target_path, artifact_id)
+            ai_result = self._run_ai_on_path(aligned_png)
+        elif self._settings.run_ai_on_upload:
             ai_result = self._run_ai(metadata)
 
         record = {
             "timestamp_ms": int(time.time() * 1000),
             "saved_file": str(target_path),
+            "alignment_complete": alignment_complete,
             "metadata": metadata,
             "content_type": file.content_type,
             "size_bytes": size_bytes,
@@ -93,6 +103,7 @@ class InspectionService:
             "message": "Upload received",
             "saved_file": str(target_path),
             "size_bytes": size_bytes,
+            "alignment_complete": alignment_complete,
             "pose_result": pose_result,
             "correction_dispatch": correction_dispatch,
             "ai_result": ai_result,
@@ -207,6 +218,43 @@ class InspectionService:
                 "model_name": str(model_name),
                 "error": str(exc),
             }
+
+    def _run_ai_on_path(self, image_path: Path) -> dict[str, Any]:
+        """Run the default AI model (YOLO detect) on an image file path."""
+        model_name = self._settings.default_ai_model_name
+        try:
+            image_bytes = image_path.read_bytes()
+            output = self._model_service.detect_image(model_name, image_bytes)
+            return {
+                "ok": True,
+                "model_name": model_name,
+                "image_path": str(image_path),
+                "output": output,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "model_name": model_name,
+                "image_path": str(image_path),
+                "error": str(exc),
+            }
+
+    def _save_aligned_png(self, source_path: Path, artifact_id: str) -> Path:
+        """Save a copy of the final aligned image as a PNG for archival and AI input."""
+        try:
+            import cv2
+            aligned_dir = self._settings.uploads_dir / "aligned"
+            aligned_dir.mkdir(parents=True, exist_ok=True)
+            ts_ms = int(time.time() * 1000)
+            out_path = aligned_dir / f"aligned_final_{artifact_id}_{ts_ms}.png"
+            img = cv2.imread(str(source_path))
+            if img is not None:
+                cv2.imwrite(str(out_path), img)
+                return out_path
+        except Exception:
+            pass
+        # Fallback: return source path unchanged if cv2 unavailable or error
+        return source_path
 
     def _dispatch_pose_command(
         self,

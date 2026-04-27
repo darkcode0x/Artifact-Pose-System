@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.core.config import Settings
 from app.services.command_service import CommandService
 from app.services.device_registry import DeviceRegistry
@@ -27,6 +29,34 @@ class AppContainer:
 
     def startup(self) -> None:
         self.mqtt_bridge.start()
+        self._auto_load_default_model()
+
+    def _auto_load_default_model(self) -> None:
+        """Auto-load the default YOLO .pt model from model_dir at startup."""
+        model_path_str = self.settings.default_ai_model_path.strip()
+        model_name = self.settings.default_ai_model_name
+
+        if model_path_str:
+            candidate = Path(model_path_str)
+            if not candidate.is_absolute():
+                candidate = self.settings.model_dir / candidate
+        else:
+            # Scan model_dir for first *.pt file
+            pt_files = sorted(self.settings.model_dir.glob("*.pt"))
+            if not pt_files:
+                print(f"[STARTUP] No *.pt model found in {self.settings.model_dir}, AI detection unavailable")
+                return
+            candidate = pt_files[0]
+
+        try:
+            self.model_service.load_model(
+                name=model_name,
+                path=str(candidate),
+                backend="auto",
+            )
+            print(f"[STARTUP] Auto-loaded AI model '{model_name}' from {candidate}")
+        except Exception as exc:
+            print(f"[STARTUP] Failed to auto-load AI model '{model_name}' from {candidate}: {exc}")
 
     def shutdown(self) -> None:
         self.mqtt_bridge.stop()

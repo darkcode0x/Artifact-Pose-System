@@ -125,3 +125,5 @@ ai_module/pipeline_output/
 *.docx
 *.pdf
 *.png
+
+model/

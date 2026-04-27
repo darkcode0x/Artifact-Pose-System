@@ -120,6 +120,11 @@ class Settings:
     sign_rotate_pan: int
     sign_rotate_tilt: int
 
+    # AI model auto-load
+    run_ai_on_aligned_image: bool
+    default_ai_model_name: str
+    default_ai_model_path: str  # empty = scan model_dir for first *.pt
+
     @property
     def uploads_dir(self) -> Path:
         return self.data_dir / "uploads"
@@ -217,4 +222,7 @@ def get_settings() -> Settings:
         sign_move_z=_sign_int("SIGN_MOVE_Z", -1),
         sign_rotate_pan=_sign_int("SIGN_ROTATE_PAN", -1),
         sign_rotate_tilt=_sign_int("SIGN_ROTATE_TILT", -1),
+        run_ai_on_aligned_image=_env_bool("RUN_AI_ON_ALIGNED_IMAGE", True),
+        default_ai_model_name=_env_str("DEFAULT_AI_MODEL_NAME", "default"),
+        default_ai_model_path=_env_str("DEFAULT_AI_MODEL_PATH", ""),
     )

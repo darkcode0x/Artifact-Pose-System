@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta, timezone
 
-from jose import jwt
+from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -27,3 +27,8 @@ def create_access_token(data: dict, expires_minutes: int | None = None) -> str:
     expire_at = datetime.now(timezone.utc) + timedelta(minutes=ttl)
     payload.update({"exp": expire_at})
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_token(token: str) -> dict:
+    """Decode and verify a JWT. Raises JWTError on failure."""
+    return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
