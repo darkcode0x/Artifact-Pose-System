@@ -201,14 +201,9 @@ IMAGE_DIR=./data/pictures
 ### Chạy device agent trên Pi
 
 ```bash
-cd /path/to/embed/device_agent
-pip install -r requirements.txt
+cd embed/device_agent
+PYTHONPATH=. python3 runtime/main_app.py
 
-# Chạy agent
-python -m runtime.main_app
-
-# Hoặc chạy như service
-python runtime/main_app.py
 ```
 
 ### Kiểm tra Pi đã kết nối
