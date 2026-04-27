@@ -1,34 +1,36 @@
-import 'dart:convert';
-
-import 'package:http/http.dart' as http;
-
 import '../models/login_response.dart';
-import 'api_config.dart';
+import 'api_client.dart';
+import 'token_storage.dart';
 
 class AuthService {
+  final ApiClient _api;
+  final TokenStorage _tokens;
 
-  static Future<LoginResponse> login(
-      String username, String password) async {
-    final response = await http.post(
-      ApiConfig.uri('/api/v1/auth/login'),
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({
-        'username': username,
-        'password': password,
-      }),
+  AuthService({required ApiClient api, required TokenStorage tokens})
+      : _api = api,
+        _tokens = tokens;
+
+  Future<LoginResponse> login(String username, String password) async {
+    final body = await _api.post(
+      '/api/v1/auth/login',
+      body: {'username': username, 'password': password},
     );
-
-    if (response.statusCode != 200) {
-      throw Exception('Login failed: ${response.statusCode}');
-    }
-
-    final body = jsonDecode(response.body);
     if (body is! Map<String, dynamic>) {
-      throw Exception('Invalid login response format');
+      throw ApiException('Invalid login response format');
     }
+    final result = LoginResponse.fromJson(body);
+    await _tokens.save(
+      token: result.accessToken,
+      role: result.role,
+      username: username,
+    );
+    return result;
+  }
 
-    return LoginResponse.fromJson(body);
+  Future<void> logout() => _tokens.clear();
+
+  Future<bool> hasPersistedSession() async {
+    final token = await _tokens.readToken();
+    return token != null && token.isNotEmpty;
   }
 }

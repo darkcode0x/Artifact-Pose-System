@@ -7,8 +7,10 @@ from threading import Lock
 from typing import Any
 
 from fastapi import UploadFile
+from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.models.artifact import Artifact, Inspection
 from app.services.command_service import CommandService
 from app.services.model_service import ModelService
 from app.services.mqtt_bridge import MqttBridge
@@ -470,6 +472,192 @@ class InspectionService:
         with self._alignment_lock:
             self._alignment_counters.pop(alignment_key, None)
             self._alignment_start_ts.pop(alignment_key, None)
+
+    # ================================================================
+    # ARTIFACT-CENTRIC INSPECTION (used by /api/v1/artifacts routes)
+    # ================================================================
+
+    @property
+    def _artifact_uploads_dir(self) -> Path:
+        return self._settings.uploads_dir / "artifacts"
+
+    async def save_reference_image(self, artifact_id: int, file: UploadFile) -> Path:
+        """Persist a reference image for an artifact under uploads/artifacts/<id>/."""
+        target_dir = self._artifact_uploads_dir / str(artifact_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        ts_ms = int(time.time() * 1000)
+        safe_name = (file.filename or "reference.jpg").replace("/", "_").replace("\\", "_")
+        target_path = target_dir / f"reference_{ts_ms}_{safe_name}"
+
+        content = await file.read()
+        target_path.write_bytes(content)
+        return target_path
+
+    def run_artifact_inspection(
+        self,
+        *,
+        db: Session,
+        artifact: Artifact,
+        image_bytes: bytes,
+        original_filename: str,
+        description: str = "",
+        created_by: str | None = None,
+    ) -> Inspection:
+        """
+        Save the new image, compare with the artifact's reference, persist an
+        Inspection record, and update the artifact status if needed.
+        """
+        target_dir = self._artifact_uploads_dir / str(artifact.id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        ts_ms = int(time.time() * 1000)
+        safe_name = original_filename.replace("/", "_").replace("\\", "_")
+        current_path = target_dir / f"inspection_{ts_ms}_{safe_name}"
+        current_path.write_bytes(image_bytes)
+
+        reference_path = (
+            Path(artifact.reference_image_path)
+            if artifact.reference_image_path
+            else None
+        )
+
+        analysis = self._analyze_against_reference(
+            current_path=current_path,
+            reference_path=reference_path,
+            artifact_id=artifact.id,
+            ts_ms=ts_ms,
+        )
+
+        damage_score = int(round(analysis["damage_score"]))
+        damage_score = max(0, min(100, damage_score))
+        status = self._classify_damage_status(damage_score, analysis.get("ssim"))
+
+        record = Inspection(
+            artifact_id=artifact.id,
+            previous_image_path=str(reference_path) if reference_path else None,
+            current_image_path=str(current_path),
+            heatmap_path=analysis.get("heatmap_path"),
+            damage_score=damage_score,
+            ssim_score=(
+                f"{analysis['ssim']:.4f}" if analysis.get("ssim") is not None else None
+            ),
+            status=status,
+            description=description or analysis.get("auto_description", ""),
+            detections_json=analysis.get("detections_json"),
+            created_by=created_by,
+        )
+        db.add(record)
+
+        # Promote artifact status if this inspection found something worse than current.
+        artifact.status = self._merge_artifact_status(artifact.status, status)
+        db.commit()
+        db.refresh(record)
+        return record
+
+    @staticmethod
+    def _classify_damage_status(damage_score: int, ssim: float | None) -> str:
+        if ssim is not None and ssim > 0.95 and damage_score < 5:
+            return "good"
+        if damage_score < 15 and (ssim is None or ssim > 0.85):
+            return "good"
+        if damage_score < 35:
+            return "warning"
+        return "damaged"
+
+    @staticmethod
+    def _merge_artifact_status(current: str, new_status: str) -> str:
+        priority = {"good": 0, "need_check": 1, "maintenance": 1, "warning": 2, "damaged": 3}
+        cur_p = priority.get(current, 0)
+        new_p = priority.get(new_status, 0)
+        return new_status if new_p > cur_p else current
+
+    def _analyze_against_reference(
+        self,
+        *,
+        current_path: Path,
+        reference_path: Path | None,
+        artifact_id: int,
+        ts_ms: int,
+    ) -> dict[str, Any]:
+        """
+        Lightweight damage analysis using OpenCV. Returns dict with damage_score
+        (0-100), optional ssim, optional heatmap_path, auto_description.
+        """
+        if reference_path is None or not reference_path.exists():
+            return {
+                "damage_score": 0.0,
+                "ssim": None,
+                "heatmap_path": None,
+                "auto_description": "No reference image; capture saved as baseline.",
+                "detections_json": None,
+            }
+
+        try:
+            import cv2
+            import numpy as np
+        except Exception:
+            return {
+                "damage_score": 0.0,
+                "ssim": None,
+                "heatmap_path": None,
+                "auto_description": "OpenCV not available; analysis skipped.",
+                "detections_json": None,
+            }
+
+        current = cv2.imread(str(current_path))
+        reference = cv2.imread(str(reference_path))
+        if current is None or reference is None:
+            return {
+                "damage_score": 0.0,
+                "ssim": None,
+                "heatmap_path": None,
+                "auto_description": "Could not decode one of the images.",
+                "detections_json": None,
+            }
+
+        # Resize current to reference shape (a real pipeline would align with SIFT).
+        h, w = reference.shape[:2]
+        if current.shape[:2] != (h, w):
+            current = cv2.resize(current, (w, h))
+
+        gray_cur = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY)
+        gray_ref = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
+        diff = cv2.absdiff(gray_ref, gray_cur)
+        diff_blur = cv2.GaussianBlur(diff, (5, 5), 0)
+        _, mask = cv2.threshold(diff_blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
+
+        damage_pct = float(cv2.countNonZero(mask)) / float(h * w) * 100.0
+
+        # Heatmap visualization for the client to display.
+        heatmap = cv2.applyColorMap(diff_blur, cv2.COLORMAP_JET)
+        overlay = cv2.addWeighted(current, 0.6, heatmap, 0.4, 0)
+        heatmap_path = current_path.parent / f"heatmap_{ts_ms}.jpg"
+        cv2.imwrite(str(heatmap_path), overlay)
+
+        # Optional structural similarity if scikit-image is available.
+        ssim_value: float | None = None
+        try:
+            from skimage.metrics import structural_similarity
+
+            ssim_value = float(
+                structural_similarity(gray_ref, gray_cur, win_size=7)
+            )
+        except Exception:
+            ssim_value = None
+
+        return {
+            "damage_score": damage_pct,
+            "ssim": ssim_value,
+            "heatmap_path": str(heatmap_path),
+            "auto_description": (
+                f"Auto: damage area {damage_pct:.1f}%"
+                + (f", SSIM {ssim_value:.3f}" if ssim_value is not None else "")
+            ),
+            "detections_json": None,
+        }
 
     def _publish_alignment_signal(
         self,

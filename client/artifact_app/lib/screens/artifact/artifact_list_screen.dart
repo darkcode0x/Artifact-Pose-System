@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
 import '../../models/artifact.dart';
-import '../../services/museum_service.dart';
-import 'artifact_detail_screen.dart';
+import '../../providers/artifact_provider.dart';
+import '../../services/api_config.dart';
+import '../../theme.dart';
+import '../../widgets/responsive_scaffold.dart';
+import '../../widgets/status_badge.dart';
 import 'add_artifact_screen.dart';
-import '../schedule/schedule_screen.dart';
+import 'artifact_detail_screen.dart';
 
 class ArtifactListScreen extends StatefulWidget {
   const ArtifactListScreen({super.key});
@@ -13,164 +18,175 @@ class ArtifactListScreen extends StatefulWidget {
 }
 
 class _ArtifactListScreenState extends State<ArtifactListScreen> {
-
-  final service = MuseumService();
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<ArtifactProvider>().refresh();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    final provider = context.watch<ArtifactProvider>();
 
     return Scaffold(
-
-      backgroundColor: const Color(0xFFE9ECE7),
-
-      appBar: AppBar(
-
-        title: const Text("Artifacts"),
-
-        backgroundColor: const Color(0xFF1E3A1F),
-
-        actions: [
-
-          IconButton(
-            icon: const Icon(Icons.calendar_month),
-
-            onPressed: () {
-
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const ScheduleScreen(),
-                ),
-              );
-
-            },
-          )
-        ],
+      appBar: AppBar(title: const Text('Artifacts')),
+      body: RefreshIndicator(
+        onRefresh: () => context.read<ArtifactProvider>().refresh(),
+        child: ResponsiveBody(
+          padding: const EdgeInsets.all(16),
+          child: _buildBody(provider),
+        ),
       ),
-
-      body: ListView.builder(
-
-        padding: const EdgeInsets.all(15),
-
-        itemCount: service.artifacts.length,
-
-        itemBuilder: (context, index) {
-
-          Artifact artifact = service.artifacts[index];
-
-          return _artifactCard(artifact);
-        },
-      ),
-
-      floatingActionButton: FloatingActionButton(
-
-        backgroundColor: const Color(0xFF1E3A1F),
-
-        child: const Icon(Icons.add),
-
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: AppColors.primary,
+        foregroundColor: Colors.white,
         onPressed: () async {
-
-          final newArtifact = await Navigator.push(
-
+          final created = await Navigator.push<bool>(
             context,
-
-            MaterialPageRoute(
-              builder: (_) => const AddArtifactScreen(),
-            ),
+            MaterialPageRoute(builder: (_) => const AddArtifactScreen()),
           );
-
-          if (newArtifact != null) {
-
-            setState(() {
-              service.addArtifact(newArtifact);
-            });
-
+          if (created == true && mounted) {
+            await context.read<ArtifactProvider>().refresh();
           }
         },
+        icon: const Icon(Icons.add),
+        label: const Text('New artifact'),
       ),
     );
   }
 
-  // ================= CARD =================
+  Widget _buildBody(ArtifactProvider provider) {
+    if (provider.loading && provider.artifacts.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (provider.error != null && provider.artifacts.isEmpty) {
+      return ErrorStateView(
+        message: provider.error!,
+        onRetry: () => context.read<ArtifactProvider>().refresh(),
+      );
+    }
+    if (provider.artifacts.isEmpty) {
+      return const EmptyStateView(
+        icon: Icons.inventory_2_outlined,
+        title: 'No artifacts yet',
+        subtitle: 'Tap "New artifact" to add the first one.',
+      );
+    }
+    return ListView.separated(
+      itemCount: provider.artifacts.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) => _ArtifactCard(
+        artifact: provider.artifacts[index],
+      ),
+    );
+  }
+}
 
-  Widget _artifactCard(Artifact artifact) {
+class _ArtifactCard extends StatelessWidget {
+  final Artifact artifact;
 
-    return GestureDetector(
+  const _ArtifactCard({required this.artifact});
 
-      onTap: () {
-
-        Navigator.push(
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) =>
-                ArtifactDetailScreen(artifact: artifact),
+            builder: (_) => ArtifactDetailScreen(artifact: artifact),
           ),
-        );
-
-      },
-
-      child: Container(
-
-        margin: const EdgeInsets.only(bottom: 15),
-
-        padding: const EdgeInsets.all(18),
-
-        decoration: BoxDecoration(
-
-          color: Colors.white,
-
-          borderRadius: BorderRadius.circular(20),
-
         ),
-
-        child: Row(
-
-          children: [
-
-            Icon(
-              artifact.hasImage
-                  ? Icons.image
-                  : Icons.image_not_supported,
-              size: 40,
-              color: const Color(0xFF1E3A1F),
-            ),
-
-            const SizedBox(width: 15),
-
-            Expanded(
-
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-
-                children: [
-
-                  Text(
-                    artifact.name,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-
-                  Text(
-                    artifact.location,
-                    style: const TextStyle(
-                      color: Colors.black54,
-                    ),
-                  ),
-
-                  Text(
-                    "Status: ${artifact.status}",
-                    style: const TextStyle(
-                      color: Colors.black54,
-                    ),
-                  ),
-                ],
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              _Thumbnail(
+                hasImage: artifact.hasImage,
+                imageUrl: artifact.referenceImagePath,
               ),
-            ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      artifact.name,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const Icon(Icons.place_outlined,
+                            size: 14, color: AppColors.textMuted),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            artifact.location.isEmpty ? '—' : artifact.location,
+                            style: const TextStyle(color: AppColors.textMuted),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    StatusBadge(status: artifact.status, compact: true),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: AppColors.textMuted),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
-            const Icon(Icons.chevron_right)
-          ],
+class _Thumbnail extends StatelessWidget {
+  final bool hasImage;
+  final String? imageUrl;
+
+  const _Thumbnail({required this.hasImage, required this.imageUrl});
+
+  @override
+  Widget build(BuildContext context) {
+    if (!hasImage || imageUrl == null || imageUrl!.isEmpty) {
+      return Container(
+        width: 64,
+        height: 64,
+        decoration: BoxDecoration(
+          color: AppColors.surfaceMuted,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: const Icon(
+          Icons.image_not_supported_outlined,
+          color: AppColors.textFaint,
+        ),
+      );
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: Image.network(
+        ApiConfig.resolveAssetUrl(imageUrl),
+        width: 64,
+        height: 64,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => Container(
+          width: 64,
+          height: 64,
+          color: AppColors.surfaceMuted,
+          child: const Icon(Icons.broken_image_outlined,
+              color: AppColors.textFaint),
         ),
       ),
     );
