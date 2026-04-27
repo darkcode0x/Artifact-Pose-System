@@ -161,10 +161,12 @@ class APIClient:
 					files=files,
 					timeout=self.config.upload_stereo_timeout_sec,
 				)
-				response.raise_for_status()
+				if not response.ok:
+					print(f"[API] Loi upload stereo pair: {response.status_code} - {response.text[:500]}")
+					return None
 			body = response.json()
 			print(f"[API] Upload stereo pair thanh cong: {body.get('message', '')}")
 			return body if isinstance(body, dict) else None
 		except RequestException as exc:
-			print(f"[API] Loi upload stereo pair: {exc}")
+			print(f"[API] Loi upload stereo pair (network): {exc}")
 			return None

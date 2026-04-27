@@ -422,6 +422,7 @@ class InspectionService:
         payload = {
             "action": "move",
             "task_id": self._command_service.build_task_id(),
+            "priority": int(motor_command.get("priority", 0)),
             "yaw_delta": rotate_pan,
             "pitch_delta": rotate_tilt,
             "x_steps": int(abs(round(move_x))),

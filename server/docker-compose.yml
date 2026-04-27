@@ -50,11 +50,16 @@ services:
       RUN_POSE_ON_UPLOAD: ${RUN_POSE_ON_UPLOAD:-true}
       RUN_AI_ON_UPLOAD: ${RUN_AI_ON_UPLOAD:-false}
       AUTO_DISPATCH_POSE_COMMAND: ${AUTO_DISPATCH_POSE_COMMAND:-true}
+      RUN_AI_ON_ALIGNED_IMAGE: ${RUN_AI_ON_ALIGNED_IMAGE:-true}
+      DEFAULT_AI_MODEL_NAME: ${DEFAULT_AI_MODEL_NAME:-default}
+      DEFAULT_AI_MODEL_PATH: ${DEFAULT_AI_MODEL_PATH:-}
       # Hardcode postgres service hostname — do not use ${AUTH_DATABASE_URL} substitution
       # because server/.env (dung cho local) dung 127.0.0.1 se ghi de va lam mat ket noi.
       AUTH_DATABASE_URL: postgresql+psycopg://artifact:${POSTGRES_PASSWORD:-artifact123}@postgres:5432/${POSTGRES_DB:-artifact_auth}
-      MQTT_HOST: ${MQTT_HOST:-mosquitto}
-      MQTT_PORT: ${MQTT_PORT:-1883}
+      # Hardcode MQTT broker container hostname — same reason as AUTH_DATABASE_URL:
+      # server/.env (dung cho local) co MQTT_HOST=127.0.0.1 se ghi de gia tri nay.
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
       MQTT_KEEPALIVE_SEC: ${MQTT_KEEPALIVE_SEC:-60}
       MQTT_USERNAME: ${MQTT_USERNAME:-}
       MQTT_PASSWORD: ${MQTT_PASSWORD:-}
@@ -72,6 +77,9 @@ services:
       SIGN_MOVE_Z: ${SIGN_MOVE_Z:-1}
       SIGN_ROTATE_PAN: ${SIGN_ROTATE_PAN:-1}
       SIGN_ROTATE_TILT: ${SIGN_ROTATE_TILT:-1}
+      TRANS_TOLERANCE_MM: ${TRANS_TOLERANCE_MM:-10.0}
+      ROT_TOLERANCE_DEG: ${ROT_TOLERANCE_DEG:-1.0}
+      STEPS_PER_MM: ${STEPS_PER_MM:-860.0}
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-CHANGE_ME_AUTH_SECRET}
       AUTH_ALGORITHM: ${AUTH_ALGORITHM:-HS256}
       AUTH_ACCESS_TOKEN_EXPIRE_MINUTES: ${AUTH_ACCESS_TOKEN_EXPIRE_MINUTES:-60}

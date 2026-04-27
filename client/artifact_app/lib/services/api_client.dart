@@ -146,5 +146,57 @@ class ApiClient {
     }
   }
 
+  // ── Workflow / Device APIs ───────────────────────────────────────────────
+
+  Future<Map<String, dynamic>> deviceStatus(String deviceId) async {
+    final res = await get('/devices/$deviceId/status');
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  Future<Map<String, dynamic>> startInitialization({
+    required String deviceId,
+    required String artifactId,
+    double baselineMm = 100.0,
+    double stepsPerMm = 860.0,
+  }) async {
+    final res = await post(
+      '/workflows/$deviceId/start-initialization',
+      body: {
+        'artifact_id': artifactId,
+        'baseline_mm': baselineMm,
+        'steps_per_mm': stepsPerMm,
+      },
+    );
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  Future<Map<String, dynamic>> startAlignment({
+    required String deviceId,
+    required String artifactId,
+  }) async {
+    final res = await post(
+      '/workflows/$deviceId/start-alignment',
+      body: {'artifact_id': artifactId},
+    );
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  Future<Map<String, dynamic>> captureRequest({
+    required String deviceId,
+    required String artifactId,
+    String jobType = 'alignment',
+  }) async {
+    final res = await post(
+      '/workflows/$deviceId/capture-request',
+      body: {'artifact_id': artifactId, 'job_type': jobType},
+    );
+    return Map<String, dynamic>.from(res as Map);
+  }
+
+  Future<Map<String, dynamic>> mqttHealth() async {
+    final res = await get('/mqtt/health');
+    return Map<String, dynamic>.from(res as Map);
+  }
+
   void dispose() => _http.close();
 }

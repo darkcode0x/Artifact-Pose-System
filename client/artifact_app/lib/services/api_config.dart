@@ -1,9 +1,10 @@
 class ApiConfig {
-  // Pass --dart-define=API_BASE_URL=https://your-backend at build time.
-  // Default 10.0.2.2 lets the Android emulator reach the host machine.
+  // Pass --dart-define=API_BASE_URL=http://192.168.0.102:8000 at build time.
+  // Default: PC home WiFi IP (192.168.0.102:8000).
+  // For emulator use 10.0.2.2:8000; for adb-reverse use 127.0.0.1:8000.
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000',
+    defaultValue: 'http://192.168.0.102:8000',
   );
 
   static Uri uri(String path, [Map<String, dynamic>? query]) {

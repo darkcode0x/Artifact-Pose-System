@@ -40,6 +40,7 @@ class ArtifactApp extends StatelessWidget {
 
     return MultiProvider(
       providers: [
+        Provider<ApiClient>.value(value: apiClient),
         ChangeNotifierProvider(
           create: (_) {
             final p =
