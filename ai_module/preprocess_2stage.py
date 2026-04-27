@@ -37,6 +37,8 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
 warnings.filterwarnings('ignore')
 
 from PIL import Image
+import numpy as np
+import cv2
 
 # ===================== CONFIG =====================
 SRC_TV = Path('data/dataset_train_2704/train')
@@ -47,6 +49,57 @@ DST_S2 = DST / 'stage2'
 
 VAL_RATIO = 0.15
 MIN_TEST_PER_CLASS = 25
+
+# ===================== ENHANCEMENT (lam noi bat damage) =====================
+# Bat = enhanced dataset. Tat = dataset goc (de A/B test).
+ENABLE_ENHANCEMENT = True
+
+# CLAHE: local contrast tren L channel (LAB)
+CLAHE_CLIP = 2.5
+CLAHE_TILE = (8, 8)
+
+# Unsharp mask: boost edge -> scratch/fold ro hon
+UNSHARP_SIGMA = 3.0
+UNSHARP_AMOUNT = 0.5      # 0=khong sharpen, 0.5=vua, 1.0=manh
+
+# HSV boost selective: tang saturation cho vung khac mau (burn/staning/dirt)
+HSV_S_BOOST = 0.15        # 0=khong, 0.30=manh
+HSV_V_CONTRAST = 1.10     # >1 = nang contrast; 1.0 = giu nguyen
+
+
+def enhance_damage(img_pil: Image.Image) -> Image.Image:
+    """
+    Lam damage features noi bat hon truoc khi train.
+    - CLAHE: contrast cuc bo -> texture (fold/peel/dirt) ro hon
+    - Unsharp mask: edge sharp -> scratch ro hon
+    - HSV boost selective: saturation high voi vung mau bat thuong (burn/staning)
+    """
+    img = np.array(img_pil)
+
+    # 1) CLAHE tren L channel cua LAB (tu nhien hon RGB-CLAHE)
+    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP, tileGridSize=CLAHE_TILE)
+    l = clahe.apply(l)
+    img = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2RGB)
+
+    # 2) Unsharp mask
+    if UNSHARP_AMOUNT > 0:
+        blur = cv2.GaussianBlur(img, (0, 0), sigmaX=UNSHARP_SIGMA)
+        img = cv2.addWeighted(img, 1.0 + UNSHARP_AMOUNT, blur, -UNSHARP_AMOUNT, 0)
+        img = np.clip(img, 0, 255).astype(np.uint8)
+
+    # 3) HSV boost selective
+    if HSV_S_BOOST > 0 or HSV_V_CONTRAST != 1.0:
+        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32)
+        # Saturation: boost MANH HON tai vung da co saturation cao (selective)
+        s_norm = hsv[..., 1] / 255.0
+        hsv[..., 1] = np.clip(hsv[..., 1] * (1 + HSV_S_BOOST * s_norm), 0, 255)
+        # Value contrast quanh 128
+        hsv[..., 2] = np.clip((hsv[..., 2] - 128) * HSV_V_CONTRAST + 128, 0, 255)
+        img = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+
+    return Image.fromarray(img)
 
 # Image preprocessing
 MAX_IMG_DIM = 1600
@@ -188,6 +241,9 @@ def fix_image_save(src: Path, dst_dir: Path, stem: str):
             scale = min(1.0, MAX_IMG_DIM / max(w, h))
             if scale < 1.0:
                 im = im.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            # *** ENHANCEMENT: lam noi bat damage features ***
+            if ENABLE_ENHANCEMENT:
+                im = enhance_damage(im)
             dst = dst_dir / f'{stem}.jpg'
             im.save(dst, format='JPEG', quality=JPEG_QUALITY, optimize=True)
         return dst
@@ -298,6 +354,8 @@ def main():
     for split in ('train', 'val', 'test'):
         (DST_S1 / 'images' / split).mkdir(parents=True, exist_ok=True)
         (DST_S1 / 'labels' / split).mkdir(parents=True, exist_ok=True)
+        # GT 8-class labels (cho combined mAP eval - chi can test thuc te)
+        (DST_S1 / 'labels_8class' / split).mkdir(parents=True, exist_ok=True)
         for cname in CLASS_NAMES.values():
             (DST_S2 / split / cname).mkdir(parents=True, exist_ok=True)
 
@@ -319,6 +377,9 @@ def main():
             s1_lbl = DST_S1 / 'labels' / split / f"{it['stem']}.txt"
             s1_anns = [(0, cx, cy, w, h) for (_, cx, cy, w, h) in it['anns']]
             write_label_file(s1_lbl, s1_anns)
+            # Save 8-class GT (cho combined eval sau)
+            s1_8c_lbl = DST_S1 / 'labels_8class' / split / f"{it['stem']}.txt"
+            write_label_file(s1_8c_lbl, it['anns'])
             s1_count[split] += 1
 
             # Stage 2 crops (read tu file da save de dung kich thuoc da resize)
