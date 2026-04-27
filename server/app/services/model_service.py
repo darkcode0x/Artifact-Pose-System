@@ -55,6 +55,83 @@ class OnnxRuntimeModel(BaseRuntimeModel):
         return _to_jsonable(output)
 
 
+class UltralyticsYoloRuntimeModel(BaseRuntimeModel):
+    def __init__(self, model_path: Path, imgsz: int = 960) -> None:
+        try:
+            from ultralytics import YOLO
+        except Exception as exc:
+            raise RuntimeError(
+                "Can not import ultralytics. Install it with: pip install ultralytics"
+            ) from exc
+
+        self._model = YOLO(str(model_path))
+        self._imgsz = imgsz
+        self._names: dict[int, str] = dict(self._model.names) if hasattr(self._model, "names") else {}
+
+    @property
+    def names(self) -> dict[int, str]:
+        return self._names
+
+    def predict(self, input_data: Any) -> Any:
+        image = self._decode_image(input_data)
+        results = self._model.predict(
+            image,
+            imgsz=self._imgsz,
+            conf=0.25,
+            iou=0.5,
+            verbose=False,
+        )
+        return self._results_to_json(results)
+
+    @staticmethod
+    def _decode_image(input_data: Any) -> np.ndarray:
+        import cv2
+
+        if isinstance(input_data, (bytes, bytearray)):
+            buffer = np.frombuffer(input_data, dtype=np.uint8)
+            image = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+            if image is None:
+                raise ValueError("Invalid image bytes")
+            return image
+
+        if isinstance(input_data, str):
+            image = cv2.imread(input_data)
+            if image is None:
+                raise ValueError(f"Can not read image at path: {input_data}")
+            return image
+
+        array = np.asarray(input_data)
+        if array.ndim not in (2, 3):
+            raise ValueError("Image array must be 2D or 3D")
+        return array
+
+    def _results_to_json(self, results: Any) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+        for result in results:
+            boxes = getattr(result, "boxes", None)
+            if boxes is None or boxes.xyxy is None or len(boxes) == 0:
+                output.append({"detections": []})
+                continue
+
+            xyxy = boxes.xyxy.cpu().numpy().tolist()
+            conf = boxes.conf.cpu().numpy().tolist()
+            cls = boxes.cls.cpu().numpy().astype(int).tolist()
+
+            detections = []
+            for i, class_id in enumerate(cls):
+                x1, y1, x2, y2 = xyxy[i]
+                detections.append(
+                    {
+                        "class_id": int(class_id),
+                        "class_name": self._names.get(int(class_id), str(int(class_id))),
+                        "confidence": float(conf[i]),
+                        "bbox_xyxy": [float(x1), float(y1), float(x2), float(y2)],
+                    }
+                )
+            output.append({"detections": detections})
+        return output
+
+
 class TorchScriptRuntimeModel(BaseRuntimeModel):
     def __init__(self, model_path: Path) -> None:
         try:
@@ -150,6 +227,21 @@ class ModelService:
         result = loaded.runtime_model.predict(input_data)
         return _to_jsonable(result)
 
+    def detect_image(self, name: str, image_bytes: bytes) -> Any:
+        with self._lock:
+            loaded = self._models.get(name)
+
+        if loaded is None:
+            raise KeyError(f"Model '{name}' is not loaded")
+
+        if not isinstance(loaded.runtime_model, UltralyticsYoloRuntimeModel):
+            raise ValueError(
+                f"Model '{name}' backend '{loaded.backend}' does not support image detection"
+            )
+
+        result = loaded.runtime_model.predict(image_bytes)
+        return _to_jsonable(result)
+
     @staticmethod
     def _detect_backend(model_path: Path | None) -> str:
         if model_path is None:
@@ -159,7 +251,9 @@ class ModelService:
         if suffix == ".onnx":
             return "onnx"
         if suffix in {".pt", ".pth"}:
-            return "torchscript"
+            # Project standard: .pt = Ultralytics YOLO weights.
+            # For TorchScript files, set backend='torchscript' explicitly.
+            return "yolo"
 
         raise ValueError(
             "Can not detect backend from model extension. "
@@ -182,5 +276,8 @@ class ModelService:
 
         if backend in {"torch", "torchscript"}:
             return TorchScriptRuntimeModel(model_path)
+
+        if backend in {"yolo", "ultralytics"}:
+            return UltralyticsYoloRuntimeModel(model_path)
 
         raise ValueError(f"Unsupported backend: {backend}")

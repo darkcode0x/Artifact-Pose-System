@@ -45,6 +45,8 @@ Base = declarative_base()
 
 
 def init_auth_database() -> None:
+    # Import all model modules so that Base.metadata picks up every table.
+    from app.models import artifact as _artifact  # noqa: F401
     from app.models import user as _user  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

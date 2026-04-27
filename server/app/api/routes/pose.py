@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 
@@ -8,6 +9,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from app.api.dependencies import get_container
 from app.schemas.pose import PoseCorrectionResponse, PoseHealthResponse, PoseInitializeResponse
 from app.services.state import AppContainer
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -54,6 +57,7 @@ async def initialize_golden(
     try:
         result = container.pose_service.initialize_golden(left_path, right_path)
     except Exception as exc:
+        logger.error("[initialize_golden] FAILED: %s", exc, exc_info=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return PoseInitializeResponse(

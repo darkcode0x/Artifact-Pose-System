@@ -1,380 +1,306 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
-import '../artifact/artifact_list_screen.dart';
-import '../schedule/schedule_screen.dart';
+import '../../providers/artifact_provider.dart';
+import '../../providers/auth_provider.dart';
+import '../../theme.dart';
+import '../../widgets/responsive_scaffold.dart';
 import '../alerts/alert_screen.dart';
+import '../artifact/artifact_list_screen.dart';
+import '../devices/device_control_screen.dart';
+import '../schedule/schedule_screen.dart';
 
-class DashboardScreen extends StatelessWidget {
+class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
   @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<ArtifactProvider>().refresh();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-
     return Scaffold(
-
-      backgroundColor: const Color(0xFFF4F6F3),
-
       body: SafeArea(
-
-        child: Column(
-
-          children: [
-
-            // ================= HEADER =================
-
-            Container(
-
-              padding: const EdgeInsets.fromLTRB(20, 25, 20, 25),
-
-              decoration: const BoxDecoration(
-
-                gradient: LinearGradient(
-                  colors: [Color(0xFF1E3A1F), Color(0xFF2F5D32)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-
-                borderRadius: BorderRadius.vertical(
-                  bottom: Radius.circular(30),
-                ),
+        bottom: false,
+        child: RefreshIndicator(
+          onRefresh: () => context.read<ArtifactProvider>().refresh(),
+          child: ListView(
+            padding: EdgeInsets.zero,
+            children: [
+              _DashboardHeader(
+                title: 'Operator Dashboard',
+                subtitle: 'Museum Monitoring',
+                onLogout: () => context.read<AuthProvider>().logout(),
               ),
-
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        "Museum Monitoring",
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                        ),
-                      ),
-                      SizedBox(height: 6),
-                      Text(
-                        "Operator Dashboard",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  IconButton(
-                    icon: const Icon(Icons.logout, color: Colors.white),
-                    onPressed: () {
-                      _logout(context);
-                    },
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 25),
-
-            // ================= STATUS =================
-
-            Padding(
-
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-
-              child: Container(
-
-                padding: const EdgeInsets.symmetric(vertical: 25),
-
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
-                      blurRadius: 12,
-                    )
-                  ],
-                ),
-
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _StatusItem("24", "Artifacts"),
-                    _StatusItem("3", "Alerts"),
-                    _StatusItem("5", "Devices"),
-                  ],
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 35),
-
-            // ================= MAIN FUNCTIONS =================
-
-            Expanded(
-
-              child: Padding(
-
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-
+              const SizedBox(height: 16),
+              ResponsiveBody(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Column(
-
-                  crossAxisAlignment: CrossAxisAlignment.start,
-
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-
-                    const Text(
-                      "Main Functions",
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    const _StatusSummaryCard(),
+                    const SizedBox(height: 24),
+                    Text(
+                      'Main functions',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
                     ),
-
-                    const SizedBox(height: 20),
-
-                    Row(
-
-                      children: [
-
-                        Expanded(
-                          child: _actionCard(
-                            icon: Icons.calendar_month,
-                            title: "Schedule",
-                            onTap: () {
-
-                              Navigator.push(
+                    const SizedBox(height: 12),
+                    LayoutBuilder(
+                      builder: (context, c) {
+                        final cols = c.maxWidth > 520 ? 4 : 2;
+                        return GridView.count(
+                          crossAxisCount: cols,
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          mainAxisSpacing: 12,
+                          crossAxisSpacing: 12,
+                          childAspectRatio: 1.05,
+                          children: [
+                            _ActionCard(
+                              icon: Icons.calendar_month,
+                              title: 'Schedule',
+                              onTap: () => Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (_) => const ScheduleScreen(),
                                 ),
-                              );
-
-                            },
-                          ),
-                        ),
-
-                        const SizedBox(width: 20),
-
-                        Expanded(
-                          child: _actionCard(
-                            icon: Icons.inventory,
-                            title: "Artifacts",
-                            onTap: () {
-
-                              Navigator.push(
+                              ),
+                            ),
+                            _ActionCard(
+                              icon: Icons.inventory_2_outlined,
+                              title: 'Artifacts',
+                              onTap: () => Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (_) => const ArtifactListScreen(),
                                 ),
-                              );
-
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    Row(
-
-                      children: [
-
-                        Expanded(
-                          child: _actionCard(
-                            icon: Icons.warning_amber,
-                            title: "Alerts",
-                            onTap: () {
-
-                              Navigator.push(
+                              ),
+                            ),
+                            _ActionCard(
+                              icon: Icons.warning_amber_outlined,
+                              title: 'Alerts',
+                              badge: context
+                                  .watch<ArtifactProvider>()
+                                  .alerts
+                                  .length,
+                              onTap: () => Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => AlertScreen(),
+                                  builder: (_) => const AlertScreen(),
                                 ),
-                              );
-
-                            },
-                          ),
-                        ),
-
-                        const SizedBox(width: 20),
-
-                        Expanded(
-                          child: _actionCard(
-                            icon: Icons.settings,
-                            title: "Devices",
-                            onTap: () {
-                              // future device screen
-                            },
-                          ),
-                        ),
-                      ],
+                              ),
+                            ),
+                            _ActionCard(
+                              icon: Icons.settings_outlined,
+                              title: 'Devices',
+                              onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const DeviceControlScreen(),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
-
-                    const SizedBox(height: 30),
-
-                    // ================= ACTIVITY =================
-
-                    const Text(
-                      "Recent Activity",
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-
-                    const SizedBox(height: 10),
-
-                    Expanded(
-
-                      child: ListView(
-
-                        children: const [
-
-                          _ActivityItem(
-                              "Artifact #1023 inspected",
-                              "2 hours ago"
-                          ),
-
-                          _ActivityItem(
-                              "Humidity warning detected",
-                              "5 hours ago"
-                          ),
-
-                          _ActivityItem(
-                              "New artifact added",
-                              "Yesterday"
-                          ),
-                        ],
-                      ),
-                    ),
+                    const SizedBox(height: 24),
                   ],
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
-    );
-  }
-
-  // ================= ACTION CARD =================
-
-  static Widget _actionCard({
-    required IconData icon,
-    required String title,
-    required VoidCallback onTap,
-  }) {
-
-    return GestureDetector(
-
-      onTap: onTap,
-
-      child: Container(
-
-        padding: const EdgeInsets.symmetric(vertical: 30),
-
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 12,
-            )
-          ],
-        ),
-
-        child: Column(
-
-          children: [
-
-            Icon(
-              icon,
-              size: 32,
-              color: const Color(0xFF1E3A1F),
-            ),
-
-            const SizedBox(height: 10),
-
-            Text(
-              title,
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  static void _logout(BuildContext context) {
-    Navigator.pushNamedAndRemoveUntil(
-      context,
-      '/login',
-          (route) => false,
     );
   }
 }
 
-// ================= STATUS ITEM =================
+class _DashboardHeader extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final VoidCallback onLogout;
 
-class _StatusItem extends StatelessWidget {
-
-  final String value;
-  final String label;
-
-  const _StatusItem(this.value, this.label);
+  const _DashboardHeader({
+    required this.title,
+    required this.subtitle,
+    required this.onLogout,
+  });
 
   @override
   Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [AppColors.primary, AppColors.primaryLight],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
+      ),
+      child: ResponsiveBody(
+        padding: EdgeInsets.zero,
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    subtitle,
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Sign out',
+              icon: const Icon(Icons.logout, color: Colors.white),
+              onPressed: onLogout,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
+class _StatusSummaryCard extends StatelessWidget {
+  const _StatusSummaryCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = context.watch<ArtifactProvider>();
+    final total = provider.artifacts.length;
+    final alerts = provider.alerts.length;
+    final good = provider.artifacts
+        .where((a) => !a.status.isAlert)
+        .length;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 8),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _StatusItem(value: '$total', label: 'Artifacts'),
+            _StatusItem(value: '$alerts', label: 'Alerts'),
+            _StatusItem(value: '$good', label: 'Healthy'),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusItem extends StatelessWidget {
+  final String value;
+  final String label;
+
+  const _StatusItem({required this.value, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
     return Column(
-
+      mainAxisSize: MainAxisSize.min,
       children: [
-
         Text(
           value,
           style: const TextStyle(
             fontSize: 24,
             fontWeight: FontWeight.bold,
-            color: Color(0xFF1E3A1F),
+            color: AppColors.primary,
           ),
         ),
-
-        const SizedBox(height: 6),
-
-        Text(label),
+        const SizedBox(height: 4),
+        Text(label, style: const TextStyle(color: AppColors.textMuted)),
       ],
     );
   }
 }
 
-// ================= ACTIVITY ITEM =================
-
-class _ActivityItem extends StatelessWidget {
-
+class _ActionCard extends StatelessWidget {
+  final IconData icon;
   final String title;
-  final String time;
+  final VoidCallback onTap;
+  final int? badge;
 
-  const _ActivityItem(this.title, this.time);
+  const _ActionCard({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+    this.badge,
+  });
 
   @override
   Widget build(BuildContext context) {
-
-    return ListTile(
-
-      leading: const CircleAvatar(
-        backgroundColor: Color(0xFF1E3A1F),
-        child: Icon(Icons.check, color: Colors.white),
+    return Material(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, size: 32, color: AppColors.primary),
+                  const SizedBox(height: 10),
+                  Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+            ),
+            if (badge != null && badge! > 0)
+              Positioned(
+                right: 10,
+                top: 10,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.statusWarning,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$badge',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
-
-      title: Text(title),
-
-      subtitle: Text(time),
     );
   }
 }

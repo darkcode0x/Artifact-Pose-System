@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any, Dict
 
 from api_client import APIClient, APIConfig
@@ -391,6 +391,13 @@ class MainApp:
             print(f"[MQTT] Loi parse command: {exc}")
             return
         print(f"[MQTT] Nhan lenh: {command}")
+        # Chay command trong background thread de MQTT network loop khong bi block.
+        # Neu chay trong on_message (= MQTT thread), loop_forever() khong the gui
+        # PINGREQ trong khi stepper/capture dang chay → broker ngat ket noi sau keepalive.
+        Thread(target=self._execute_and_ack, args=(command,), daemon=True).start()
+
+    def _execute_and_ack(self, command: Dict[str, Any]) -> None:
+        """Thuc thi command va gui ACK (chay trong background thread rieng)."""
         result = self.execute_command(command)
         self._publish_ack(command, result)
 

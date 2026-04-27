@@ -1,0 +1,7 @@
+scikit-image>=0.22.0
+ultralytics>=8.2.0
+# CPU-only build: ~250 MB thay vi ~2.5 GB (GPU build).
+# Neu server co GPU, xoa dong nay va thay bang torch>=2.1.0 binh thuong.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.1.0+cpu
+torchvision>=0.16.0+cpu

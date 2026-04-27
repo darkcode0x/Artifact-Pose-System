@@ -1,202 +1,193 @@
 import 'package:flutter/material.dart';
-import '../../models/image_comparison.dart';
+
+import '../../models/inspection.dart';
+import '../../services/api_config.dart';
+import '../../theme.dart';
+import '../../widgets/responsive_scaffold.dart';
+import '../../widgets/status_badge.dart';
 
 class ResultScreen extends StatelessWidget {
+  final Inspection inspection;
 
-  final ImageComparison result;
-
-  const ResultScreen({
-    super.key,
-    required this.result,
-  });
-
-  Color getStatusColor(String status) {
-
-    switch (status.toLowerCase()) {
-
-      case "good":
-        return Colors.green;
-
-      case "warning":
-        return Colors.orange;
-
-      case "damaged":
-        return Colors.red;
-
-      default:
-        return Colors.grey;
-    }
-  }
+  const ResultScreen({super.key, required this.inspection});
 
   @override
   Widget build(BuildContext context) {
-
     return Scaffold(
-
-      backgroundColor: const Color(0xFFE9ECE7),
-
-      appBar: AppBar(
-        title: const Text("Inspection Result"),
-        backgroundColor: const Color(0xFF1E3A1F),
+      appBar: AppBar(title: const Text('Inspection result')),
+      body: SafeArea(
+        child: ResponsiveBody(
+          padding: const EdgeInsets.all(16),
+          child: ListView(
+            children: [
+              StatusBadge(status: inspection.status),
+              const SizedBox(height: 16),
+              _ScoreCard(inspection: inspection),
+              const SizedBox(height: 16),
+              if (inspection.previousImagePath != null) ...[
+                const _SectionLabel('Reference'),
+                _ImagePanel(url: inspection.previousImagePath!),
+                const SizedBox(height: 16),
+              ],
+              const _SectionLabel('Captured image'),
+              _ImagePanel(url: inspection.currentImagePath),
+              const SizedBox(height: 16),
+              if (inspection.heatmapPath != null) ...[
+                const _SectionLabel('Damage heatmap'),
+                _ImagePanel(url: inspection.heatmapPath!),
+                const SizedBox(height: 16),
+              ],
+              if (inspection.description.isNotEmpty) ...[
+                const _SectionLabel('Notes'),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Text(inspection.description),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+              Text(
+                'Inspected ${_formatDate(inspection.createdAt)}'
+                '${inspection.createdBy != null ? ' by ${inspection.createdBy}' : ''}',
+                style: const TextStyle(color: AppColors.textMuted),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                height: 50,
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.check),
+                  label: const Text('Done'),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
+    );
+  }
 
-      body: SingleChildScrollView(
+  String _formatDate(DateTime dt) {
+    final local = dt.toLocal();
+    return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} '
+        '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+  }
+}
 
-        padding: const EdgeInsets.all(20),
+class _ScoreCard extends StatelessWidget {
+  final Inspection inspection;
+  const _ScoreCard({required this.inspection});
 
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
           children: [
-
-            const Text(
-              "Image Comparison",
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
+            Expanded(
+              child: _Metric(
+                label: 'Damage',
+                value: '${inspection.damageScore}%',
+                color: _scoreColor(inspection.damageScore),
               ),
             ),
-
-            const SizedBox(height: 20),
-
-            // previous image
-            const Text("Previous Image"),
-
-            const SizedBox(height: 8),
-
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.network(
-                result.previousImage,
-                height: 200,
-                width: double.infinity,
-                fit: BoxFit.cover,
+            Container(width: 1, height: 40, color: AppColors.surfaceMuted),
+            Expanded(
+              child: _Metric(
+                label: 'SSIM',
+                value: inspection.ssimScore ?? '—',
+                color: AppColors.primary,
               ),
             ),
-
-            const SizedBox(height: 20),
-
-            // current image
-            const Text("Current Image"),
-
-            const SizedBox(height: 8),
-
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.network(
-                result.currentImage,
-                height: 200,
-                width: double.infinity,
-                fit: BoxFit.cover,
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // heatmap
-            const Text("AI Heatmap"),
-
-            const SizedBox(height: 8),
-
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.network(
-                result.heatmapPath,
-                height: 200,
-                width: double.infinity,
-                fit: BoxFit.cover,
-              ),
-            ),
-
-            const SizedBox(height: 25),
-
-            // damage score
-            Row(
-              children: [
-
-                const Text(
-                  "Damage Score: ",
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-
-                Text("${result.damageScore.toStringAsFixed(2)} %"),
-              ],
-            ),
-
-            const SizedBox(height: 10),
-
-            // status
-            Row(
-              children: [
-
-                const Text(
-                  "Status: ",
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: getStatusColor(result.status),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    result.status,
-                    style: const TextStyle(
-                      color: Colors.white,
-                    ),
-                  ),
-                )
-              ],
-            ),
-
-            const SizedBox(height: 20),
-
-            const Text(
-              "Description",
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-
-            const SizedBox(height: 5),
-
-            Text(result.description),
-
-            const SizedBox(height: 20),
-
-            Text(
-              "Checked at: ${result.createdAt}",
-              style: const TextStyle(
-                color: Colors.grey,
-              ),
-            ),
-
-            const SizedBox(height: 30),
-
-            Center(
-              child: ElevatedButton(
-
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1E3A1F),
-                ),
-
-                onPressed: () {
-
-                  Navigator.pop(context);
-
-                },
-
-                child: const Text("Back"),
-              ),
-            )
           ],
+        ),
+      ),
+    );
+  }
+
+  Color _scoreColor(int score) {
+    if (score < 15) return AppColors.statusGood;
+    if (score < 35) return AppColors.statusWarning;
+    return AppColors.statusDamaged;
+  }
+}
+
+class _Metric extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+
+  const _Metric({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 26,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(label, style: const TextStyle(color: AppColors.textMuted)),
+      ],
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  final String text;
+  const _SectionLabel(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        text,
+        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+      ),
+    );
+  }
+}
+
+class _ImagePanel extends StatelessWidget {
+  final String url;
+  const _ImagePanel({required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    final resolved = ApiConfig.resolveAssetUrl(url);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: AspectRatio(
+        aspectRatio: 16 / 9,
+        child: Image.network(
+          resolved,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => Container(
+            color: AppColors.surfaceMuted,
+            child: const Center(
+              child: Icon(Icons.broken_image_outlined,
+                  color: AppColors.textFaint, size: 48),
+            ),
+          ),
+          loadingBuilder: (_, child, progress) {
+            if (progress == null) return child;
+            return Container(
+              color: AppColors.surfaceMuted,
+              child: const Center(child: CircularProgressIndicator()),
+            );
+          },
         ),
       ),
     );

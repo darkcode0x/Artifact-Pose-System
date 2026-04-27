@@ -51,9 +51,9 @@ PoseDeviation DeviationCalculator::calculate(
     PoseDeviation dev;
     Vector3d T_diff = T_current - T_golden;
 
-    dev.deltaX = T_diff.x() * config_.signX;
-    dev.deltaY = T_diff.y() * config_.signY;
-    dev.deltaZ = T_diff.z() * config_.signZ;
+    dev.deltaX = T_diff.x();
+    dev.deltaY = T_diff.y();
+    dev.deltaZ = T_diff.z();
 
     dev.translationMag = T_diff.norm();
 
@@ -64,9 +64,9 @@ PoseDeviation DeviationCalculator::calculate(
     double roll, pitch, yaw;
     rotationToEuler(R_diff, roll, pitch, yaw);
 
-    dev.deltaTilt = roll * config_.signTilt;  
-    dev.deltaPan = pitch * config_.signPan;
-    dev.deltaRoll = yaw * config_.signRoll;
+    dev.deltaTilt = roll;
+    dev.deltaPan  = pitch;
+    dev.deltaRoll = yaw;
 
     dev.rotationMag = sqrt(dev.deltaPan * dev.deltaPan +
                            dev.deltaTilt * dev.deltaTilt +
@@ -108,30 +108,57 @@ void DeviationCalculator::rotationToEuler(
 }
 
 
+// Apply servo dead zone + rounding to a rotation angle.
+// Rounds to the nearest multiple of servoMinDeg.
+// Angles that would round to 0 are zeroed (dead zone).
+static double applyServoConstraint(double angleDeg, double servoMinDeg) {
+    if (servoMinDeg <= 0.0) return angleDeg;
+    double rounded = std::round(angleDeg / servoMinDeg) * servoMinDeg;
+    return rounded;
+    // Note: std::round naturally handles the dead zone — values with
+    // |angle| < 0.5*servoMinDeg round to 0 (e.g. 0.3° with 1° step → 0°)
+}
+
 MotorCommand deviationToMotorCommand(
     const PoseDeviation& dev,
-    double stepsPerMm
+    double stepsPerMm,
+    double servoMinDeg,
+    bool   sequentialMode
 ) {
     MotorCommand cmd;
 
-    cmd.moveX = dev.deltaX * 1000.0 * stepsPerMm;  
-    cmd.moveZ = dev.deltaZ * 1000.0 * stepsPerMm; 
+    // --- Translation: convert m → mm → steps ---
+    cmd.moveX = dev.deltaX * 1000.0 * stepsPerMm;
+    cmd.moveZ = dev.deltaZ * 1000.0 * stepsPerMm;
 
-    cmd.rotatePan = dev.deltaPan;
-    cmd.rotateTilt = dev.deltaTilt;
+    // --- Rotation: apply hardware dead zone + rounding ---
+    // Angles smaller than half a servo step are zeroed to avoid
+    // infinite oscillation around the tolerance boundary.
+    cmd.rotatePan  = applyServoConstraint(dev.deltaPan,  servoMinDeg);
+    cmd.rotateTilt = applyServoConstraint(dev.deltaTilt, servoMinDeg);
 
-    // Determine priority
+    // --- Priority ---
     bool needTrans = !dev.withinTransTolerance;
-    bool needRot = !dev.withinRotTolerance;
+    bool needRot   = !dev.withinRotTolerance;
 
     if (!needTrans && !needRot) {
-        cmd.priority = 0;  
+        cmd.priority = 0;   // ALIGNED
     } else if (needTrans && !needRot) {
-        cmd.priority = 1;  
+        cmd.priority = 1;   // Translation only
     } else if (!needTrans && needRot) {
-        cmd.priority = 2; 
+        cmd.priority = 2;   // Rotation only
     } else {
-        cmd.priority = 3; 
+        cmd.priority = 3;   // Both needed
+    }
+
+    // --- Sequential mode: translation first ---
+    // When both translation and rotation are needed (priority=3),
+    // zero out rotation this step. The next correction iteration will
+    // re-evaluate pose and handle rotation once translation is done.
+    // This prevents the two DoF from coupling and amplifying each other.
+    if (sequentialMode && cmd.priority == 3) {
+        cmd.rotatePan  = 0.0;
+        cmd.rotateTilt = 0.0;
     }
 
     return cmd;

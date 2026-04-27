@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.api.dependencies import get_container
 from app.schemas.models import (
+    ModelDetectResponse,
     ModelInfo,
     ModelLoadRequest,
     ModelLoadResponse,
@@ -80,6 +81,30 @@ def predict(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return ModelPredictResponse(
+        ok=True,
+        model_name=name,
+        output=output,
+    )
+
+
+@router.post("/models/{name}/detect", response_model=ModelDetectResponse)
+async def detect_image(
+    name: str,
+    file: UploadFile = File(...),
+    container: AppContainer = Depends(get_container),
+) -> ModelDetectResponse:
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Empty image file")
+
+    try:
+        output = container.model_service.detect_image(name, image_bytes)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return ModelDetectResponse(
         ok=True,
         model_name=name,
         output=output,

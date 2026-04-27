@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from fastapi import UploadFile
+from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.models.artifact import Artifact, Inspection
 from app.services.command_service import CommandService
 from app.services.model_service import ModelService
 from app.services.mqtt_bridge import MqttBridge
@@ -31,6 +34,7 @@ class InspectionService:
         # Track alignment loop iterations per (device_id, artifact_id).
         self._alignment_counters: dict[str, int] = {}
         self._alignment_start_ts: dict[str, float] = {}
+        self._alignment_lock = Lock()
 
     async def handle_upload(self, file: UploadFile, metadata_json: str) -> dict[str, Any]:
         metadata = self._parse_metadata(metadata_json)
@@ -69,12 +73,22 @@ class InspectionService:
                 )
 
         ai_result: dict[str, Any] | None = None
-        if self._settings.run_ai_on_upload:
+        # Run AI on the final aligned image when alignment succeeds (within_tolerance=True).
+        alignment_complete = (
+            pose_result is not None
+            and isinstance(pose_result.get("deviation"), dict)
+            and bool(pose_result["deviation"].get("within_tolerance", False))
+        )
+        if self._settings.run_ai_on_aligned_image and alignment_complete:
+            aligned_png = self._save_aligned_png(target_path, artifact_id)
+            ai_result = self._run_ai_on_path(aligned_png)
+        elif self._settings.run_ai_on_upload:
             ai_result = self._run_ai(metadata)
 
         record = {
             "timestamp_ms": int(time.time() * 1000),
             "saved_file": str(target_path),
+            "alignment_complete": alignment_complete,
             "metadata": metadata,
             "content_type": file.content_type,
             "size_bytes": size_bytes,
@@ -89,6 +103,7 @@ class InspectionService:
             "message": "Upload received",
             "saved_file": str(target_path),
             "size_bytes": size_bytes,
+            "alignment_complete": alignment_complete,
             "pose_result": pose_result,
             "correction_dispatch": correction_dispatch,
             "ai_result": ai_result,
@@ -204,6 +219,43 @@ class InspectionService:
                 "error": str(exc),
             }
 
+    def _run_ai_on_path(self, image_path: Path) -> dict[str, Any]:
+        """Run the default AI model (YOLO detect) on an image file path."""
+        model_name = self._settings.default_ai_model_name
+        try:
+            image_bytes = image_path.read_bytes()
+            output = self._model_service.detect_image(model_name, image_bytes)
+            return {
+                "ok": True,
+                "model_name": model_name,
+                "image_path": str(image_path),
+                "output": output,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "model_name": model_name,
+                "image_path": str(image_path),
+                "error": str(exc),
+            }
+
+    def _save_aligned_png(self, source_path: Path, artifact_id: str) -> Path:
+        """Save a copy of the final aligned image as a PNG for archival and AI input."""
+        try:
+            import cv2
+            aligned_dir = self._settings.uploads_dir / "aligned"
+            aligned_dir.mkdir(parents=True, exist_ok=True)
+            ts_ms = int(time.time() * 1000)
+            out_path = aligned_dir / f"aligned_final_{artifact_id}_{ts_ms}.png"
+            img = cv2.imread(str(source_path))
+            if img is not None:
+                cv2.imwrite(str(out_path), img)
+                return out_path
+        except Exception:
+            pass
+        # Fallback: return source path unchanged if cv2 unavailable or error
+        return source_path
+
     def _dispatch_pose_command(
         self,
         metadata: dict[str, Any],
@@ -240,8 +292,9 @@ class InspectionService:
 
         # --- Check within_tolerance → send alignment_complete signal ---
         if bool(deviation.get("within_tolerance", False)):
-            self._alignment_counters.pop(alignment_key, None)
-            self._alignment_start_ts.pop(alignment_key, None)
+            with self._alignment_lock:
+                self._alignment_counters.pop(alignment_key, None)
+                self._alignment_start_ts.pop(alignment_key, None)
             self._publish_alignment_signal(
                 device_id=device_id,
                 action="alignment_complete",
@@ -256,16 +309,18 @@ class InspectionService:
             }
 
         # --- Check loop limits ---
-        iteration = self._alignment_counters.get(alignment_key, 0) + 1
-        start_ts = self._alignment_start_ts.get(alignment_key)
-        now = time.time()
-        if start_ts is None:
-            start_ts = now
-            self._alignment_start_ts[alignment_key] = start_ts
+        with self._alignment_lock:
+            iteration = self._alignment_counters.get(alignment_key, 0) + 1
+            start_ts = self._alignment_start_ts.get(alignment_key)
+            now = time.time()
+            if start_ts is None:
+                start_ts = now
+                self._alignment_start_ts[alignment_key] = start_ts
 
         if iteration > self._settings.max_alignment_iterations:
-            self._alignment_counters.pop(alignment_key, None)
-            self._alignment_start_ts.pop(alignment_key, None)
+            with self._alignment_lock:
+                self._alignment_counters.pop(alignment_key, None)
+                self._alignment_start_ts.pop(alignment_key, None)
             self._publish_alignment_signal(
                 device_id=device_id,
                 action="alignment_failed",
@@ -284,8 +339,9 @@ class InspectionService:
 
         elapsed = now - start_ts
         if elapsed > self._settings.alignment_timeout_sec:
-            self._alignment_counters.pop(alignment_key, None)
-            self._alignment_start_ts.pop(alignment_key, None)
+            with self._alignment_lock:
+                self._alignment_counters.pop(alignment_key, None)
+                self._alignment_start_ts.pop(alignment_key, None)
             self._publish_alignment_signal(
                 device_id=device_id,
                 action="alignment_failed",
@@ -302,7 +358,8 @@ class InspectionService:
                 "signal_sent": "alignment_failed",
             }
 
-        self._alignment_counters[alignment_key] = iteration
+        with self._alignment_lock:
+            self._alignment_counters[alignment_key] = iteration
 
         motor_command = pose_result.get("motor_command") or deviation.get("motor_command") or {}
         if not isinstance(motor_command, dict):
@@ -317,6 +374,16 @@ class InspectionService:
         raw_move_z = float(motor_command.get("move_z", 0.0) or 0.0)
         raw_rotate_pan = float(motor_command.get("rotate_pan", 0.0) or 0.0)
         raw_rotate_tilt = float(motor_command.get("rotate_tilt", 0.0) or 0.0)
+
+        # Guard: all-zero motor command means C++ unavailable (fallback mode).
+        # Sending a zero-move would waste alignment iterations.
+        if (abs(raw_move_x) < 1e-9 and abs(raw_move_z) < 1e-9
+                and abs(raw_rotate_pan) < 1e-9 and abs(raw_rotate_tilt) < 1e-9):
+            return {
+                "ok": False,
+                "sent": False,
+                "reason": "zero_motor_command_cpp_unavailable",
+            }
 
         # Apply configurable sign multipliers (default -1 = negate deviation for correction)
         move_x = raw_move_x * self._settings.sign_move_x
@@ -355,6 +422,7 @@ class InspectionService:
         payload = {
             "action": "move",
             "task_id": self._command_service.build_task_id(),
+            "priority": int(motor_command.get("priority", 0)),
             "yaw_delta": rotate_pan,
             "pitch_delta": rotate_tilt,
             "x_steps": int(abs(round(move_x))),
@@ -450,8 +518,195 @@ class InspectionService:
     def reset_alignment_counter(self, device_id: str, artifact_id: str) -> None:
         """Reset loop counter khi bat dau alignment moi."""
         alignment_key = f"{device_id}:{artifact_id}"
-        self._alignment_counters.pop(alignment_key, None)
-        self._alignment_start_ts.pop(alignment_key, None)
+        with self._alignment_lock:
+            self._alignment_counters.pop(alignment_key, None)
+            self._alignment_start_ts.pop(alignment_key, None)
+
+    # ================================================================
+    # ARTIFACT-CENTRIC INSPECTION (used by /api/v1/artifacts routes)
+    # ================================================================
+
+    @property
+    def _artifact_uploads_dir(self) -> Path:
+        return self._settings.uploads_dir / "artifacts"
+
+    async def save_reference_image(self, artifact_id: int, file: UploadFile) -> Path:
+        """Persist a reference image for an artifact under uploads/artifacts/<id>/."""
+        target_dir = self._artifact_uploads_dir / str(artifact_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        ts_ms = int(time.time() * 1000)
+        safe_name = (file.filename or "reference.jpg").replace("/", "_").replace("\\", "_")
+        target_path = target_dir / f"reference_{ts_ms}_{safe_name}"
+
+        content = await file.read()
+        target_path.write_bytes(content)
+        return target_path
+
+    def run_artifact_inspection(
+        self,
+        *,
+        db: Session,
+        artifact: Artifact,
+        image_bytes: bytes,
+        original_filename: str,
+        description: str = "",
+        created_by: str | None = None,
+    ) -> Inspection:
+        """
+        Save the new image, compare with the artifact's reference, persist an
+        Inspection record, and update the artifact status if needed.
+        """
+        target_dir = self._artifact_uploads_dir / str(artifact.id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        ts_ms = int(time.time() * 1000)
+        safe_name = original_filename.replace("/", "_").replace("\\", "_")
+        current_path = target_dir / f"inspection_{ts_ms}_{safe_name}"
+        current_path.write_bytes(image_bytes)
+
+        reference_path = (
+            Path(artifact.reference_image_path)
+            if artifact.reference_image_path
+            else None
+        )
+
+        analysis = self._analyze_against_reference(
+            current_path=current_path,
+            reference_path=reference_path,
+            artifact_id=artifact.id,
+            ts_ms=ts_ms,
+        )
+
+        damage_score = int(round(analysis["damage_score"]))
+        damage_score = max(0, min(100, damage_score))
+        status = self._classify_damage_status(damage_score, analysis.get("ssim"))
+
+        record = Inspection(
+            artifact_id=artifact.id,
+            previous_image_path=str(reference_path) if reference_path else None,
+            current_image_path=str(current_path),
+            heatmap_path=analysis.get("heatmap_path"),
+            damage_score=damage_score,
+            ssim_score=(
+                f"{analysis['ssim']:.4f}" if analysis.get("ssim") is not None else None
+            ),
+            status=status,
+            description=description or analysis.get("auto_description", ""),
+            detections_json=analysis.get("detections_json"),
+            created_by=created_by,
+        )
+        db.add(record)
+
+        # Promote artifact status if this inspection found something worse than current.
+        artifact.status = self._merge_artifact_status(artifact.status, status)
+        db.commit()
+        db.refresh(record)
+        return record
+
+    @staticmethod
+    def _classify_damage_status(damage_score: int, ssim: float | None) -> str:
+        if ssim is not None and ssim > 0.95 and damage_score < 5:
+            return "good"
+        if damage_score < 15 and (ssim is None or ssim > 0.85):
+            return "good"
+        if damage_score < 35:
+            return "warning"
+        return "damaged"
+
+    @staticmethod
+    def _merge_artifact_status(current: str, new_status: str) -> str:
+        priority = {"good": 0, "need_check": 1, "maintenance": 1, "warning": 2, "damaged": 3}
+        cur_p = priority.get(current, 0)
+        new_p = priority.get(new_status, 0)
+        return new_status if new_p > cur_p else current
+
+    def _analyze_against_reference(
+        self,
+        *,
+        current_path: Path,
+        reference_path: Path | None,
+        artifact_id: int,
+        ts_ms: int,
+    ) -> dict[str, Any]:
+        """
+        Lightweight damage analysis using OpenCV. Returns dict with damage_score
+        (0-100), optional ssim, optional heatmap_path, auto_description.
+        """
+        if reference_path is None or not reference_path.exists():
+            return {
+                "damage_score": 0.0,
+                "ssim": None,
+                "heatmap_path": None,
+                "auto_description": "No reference image; capture saved as baseline.",
+                "detections_json": None,
+            }
+
+        try:
+            import cv2
+            import numpy as np
+        except Exception:
+            return {
+                "damage_score": 0.0,
+                "ssim": None,
+                "heatmap_path": None,
+                "auto_description": "OpenCV not available; analysis skipped.",
+                "detections_json": None,
+            }
+
+        current = cv2.imread(str(current_path))
+        reference = cv2.imread(str(reference_path))
+        if current is None or reference is None:
+            return {
+                "damage_score": 0.0,
+                "ssim": None,
+                "heatmap_path": None,
+                "auto_description": "Could not decode one of the images.",
+                "detections_json": None,
+            }
+
+        # Resize current to reference shape (a real pipeline would align with SIFT).
+        h, w = reference.shape[:2]
+        if current.shape[:2] != (h, w):
+            current = cv2.resize(current, (w, h))
+
+        gray_cur = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY)
+        gray_ref = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
+        diff = cv2.absdiff(gray_ref, gray_cur)
+        diff_blur = cv2.GaussianBlur(diff, (5, 5), 0)
+        _, mask = cv2.threshold(diff_blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
+
+        damage_pct = float(cv2.countNonZero(mask)) / float(h * w) * 100.0
+
+        # Heatmap visualization for the client to display.
+        heatmap = cv2.applyColorMap(diff_blur, cv2.COLORMAP_JET)
+        overlay = cv2.addWeighted(current, 0.6, heatmap, 0.4, 0)
+        heatmap_path = current_path.parent / f"heatmap_{ts_ms}.jpg"
+        cv2.imwrite(str(heatmap_path), overlay)
+
+        # Optional structural similarity if scikit-image is available.
+        ssim_value: float | None = None
+        try:
+            from skimage.metrics import structural_similarity
+
+            ssim_value = float(
+                structural_similarity(gray_ref, gray_cur, win_size=7)
+            )
+        except Exception:
+            ssim_value = None
+
+        return {
+            "damage_score": damage_pct,
+            "ssim": ssim_value,
+            "heatmap_path": str(heatmap_path),
+            "auto_description": (
+                f"Auto: damage area {damage_pct:.1f}%"
+                + (f", SSIM {ssim_value:.3f}" if ssim_value is not None else "")
+            ),
+            "detections_json": None,
+        }
 
     def _publish_alignment_signal(
         self,

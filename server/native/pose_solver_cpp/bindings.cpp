@@ -368,7 +368,8 @@ PYBIND11_MODULE(pose_solver_cpp, m) {
     m.def("calculate_deviation", [](
         py::list rvecGolden, py::list tvecGolden,
         py::list rvecCurrent, py::list tvecCurrent,
-        double transTolerance, double rotTolerance
+        double transTolerance, double rotTolerance,
+        double servoMinDeg, bool sequentialMode, double stepsPerMm
     ) {
         Vec3d rg(rvecGolden[0].cast<double>(), rvecGolden[1].cast<double>(), rvecGolden[2].cast<double>());
         Vec3d tg(tvecGolden[0].cast<double>(), tvecGolden[1].cast<double>(), tvecGolden[2].cast<double>());
@@ -376,39 +377,51 @@ PYBIND11_MODULE(pose_solver_cpp, m) {
         Vec3d tc(tvecCurrent[0].cast<double>(), tvecCurrent[1].cast<double>(), tvecCurrent[2].cast<double>());
 
         DeviationConfig dcfg;
-        dcfg.transTolerance = transTolerance;
-        dcfg.rotTolerance = rotTolerance;
+        dcfg.transTolerance  = transTolerance;
+        dcfg.rotTolerance    = rotTolerance;
+        dcfg.servoMinDeg     = servoMinDeg;
+        dcfg.sequentialMode  = sequentialMode;
+        dcfg.stepsPerMm      = stepsPerMm;
 
         DeviationCalculator calc;
         calc.setConfig(dcfg);
         PoseDeviation dev = calc.calculate(rg, tg, rc, tc);
-        MotorCommand cmd = deviationToMotorCommand(dev);
+        MotorCommand cmd = deviationToMotorCommand(dev, stepsPerMm, servoMinDeg, sequentialMode);
 
         py::dict result;
-        result["delta_x"] = dev.deltaX;
-        result["delta_y"] = dev.deltaY;
-        result["delta_z"] = dev.deltaZ;
-        result["delta_pan"] = dev.deltaPan;
-        result["delta_tilt"] = dev.deltaTilt;
-        result["delta_roll"] = dev.deltaRoll;
-        result["translation_mag"] = dev.translationMag;
-        result["rotation_mag"] = dev.rotationMag;
-        result["within_tolerance"] = dev.withinTolerance;
+        result["delta_x"]               = dev.deltaX;
+        result["delta_y"]               = dev.deltaY;
+        result["delta_z"]               = dev.deltaZ;
+        result["delta_pan"]             = dev.deltaPan;
+        result["delta_tilt"]            = dev.deltaTilt;
+        result["delta_roll"]            = dev.deltaRoll;
+        result["translation_mag"]       = dev.translationMag;
+        result["rotation_mag"]          = dev.rotationMag;
+        result["within_tolerance"]      = dev.withinTolerance;
+        result["within_trans_tolerance"]= dev.withinTransTolerance;  // new: separate status
+        result["within_rot_tolerance"]  = dev.withinRotTolerance;    // new: separate status
 
         py::dict motorDict;
-        motorDict["move_x"] = cmd.moveX;
-        motorDict["move_z"] = cmd.moveZ;
-        motorDict["rotate_pan"] = cmd.rotatePan;
-        motorDict["rotate_tilt"] = cmd.rotateTilt;
-        motorDict["priority"] = cmd.priority;
+        motorDict["move_x"]       = cmd.moveX;
+        motorDict["move_z"]       = cmd.moveZ;
+        motorDict["rotate_pan"]   = cmd.rotatePan;   // already rounded/zeroed
+        motorDict["rotate_tilt"]  = cmd.rotateTilt;  // already rounded/zeroed
+        motorDict["priority"]     = cmd.priority;
         result["motor_command"] = motorDict;
 
         return result;
     },
     py::arg("rvec_golden"), py::arg("tvec_golden"),
     py::arg("rvec_current"), py::arg("tvec_current"),
-    py::arg("trans_tolerance") = 0.005,
-    py::arg("rot_tolerance") = 0.5,
-    "Calculate pose deviation and motor command"
+    py::arg("trans_tolerance")  = 0.010,   // 10mm
+    py::arg("rot_tolerance")    = 1.0,     // 1.0 degree (== servo min step)
+    py::arg("servo_min_deg")    = 1.0,     // Servo hardware minimum step
+    py::arg("sequential_mode")  = true,    // Translation-first priority
+    py::arg("steps_per_mm")     = 860.0,   // Stepper motor steps/mm
+    "Calculate pose deviation and motor command.\n"
+    "Rotation commands are rounded to nearest servo_min_deg step;\n"
+    "angles in the dead zone (< 0.5*servo_min_deg) are zeroed.\n"
+    "When sequential_mode=True and both trans+rot are needed,\n"
+    "only translation is sent; rotation is deferred to the next iteration."
     );
 }

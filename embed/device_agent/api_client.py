@@ -19,6 +19,10 @@ class APIConfig:
 	base_url: str
 	device_id: str
 	timeout_sec: int = 10
+	# Timeout rieng cho upload anh 4K + xu ly pose tren server.
+	# Pose correction (ORB + G2O) mat 10-20s, golden init mat 60-120s.
+	upload_inspection_timeout_sec: int = 60
+	upload_stereo_timeout_sec: int = 120
 
 
 class APIClient:
@@ -119,7 +123,7 @@ class APIClient:
 				response = requests.post(
 					self._url(endpoint),
 					files=files,
-					timeout=self.config.timeout_sec,
+					timeout=self.config.upload_inspection_timeout_sec,
 				)
 				response.raise_for_status()
 			print("[API] Upload inspection thanh cong")
@@ -155,12 +159,14 @@ class APIClient:
 				response = requests.post(
 					self._url(endpoint),
 					files=files,
-					timeout=max(self.config.timeout_sec, 30),
+					timeout=self.config.upload_stereo_timeout_sec,
 				)
-				response.raise_for_status()
+				if not response.ok:
+					print(f"[API] Loi upload stereo pair: {response.status_code} - {response.text[:500]}")
+					return None
 			body = response.json()
 			print(f"[API] Upload stereo pair thanh cong: {body.get('message', '')}")
 			return body if isinstance(body, dict) else None
 		except RequestException as exc:
-			print(f"[API] Loi upload stereo pair: {exc}")
+			print(f"[API] Loi upload stereo pair (network): {exc}")
 			return None
