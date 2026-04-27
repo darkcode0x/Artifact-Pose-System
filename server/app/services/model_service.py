@@ -251,7 +251,9 @@ class ModelService:
         if suffix == ".onnx":
             return "onnx"
         if suffix in {".pt", ".pth"}:
-            return "torchscript"
+            # Project standard: .pt = Ultralytics YOLO weights.
+            # For TorchScript files, set backend='torchscript' explicitly.
+            return "yolo"
 
         raise ValueError(
             "Can not detect backend from model extension. "
