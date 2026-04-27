@@ -56,8 +56,13 @@ RUN apt-get update \
 COPY --from=cpp-builder /usr/local/lib/libg2o* /usr/local/lib/
 RUN ldconfig
 
+# Layer 1: core deps (cache bi invalidate it hon)
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
+
+# Layer 2: AI/ML deps nang (torch CPU ~250MB, cache rieng de khong rebuild lai khi sua core)
+COPY requirements-ai.txt ./
+RUN pip install -r requirements-ai.txt
 
 COPY . .
 
