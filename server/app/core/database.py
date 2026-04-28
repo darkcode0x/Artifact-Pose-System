@@ -26,13 +26,11 @@ def _load_dotenv_file(dotenv_path: Path) -> None:
 SERVER_ROOT = Path(__file__).resolve().parents[2]
 _load_dotenv_file(SERVER_ROOT / ".env")
 
-DEFAULT_AUTH_DB_PATH = SERVER_ROOT / "data" / "auth.db"
-DEFAULT_AUTH_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-DATABASE_URL = os.getenv(
-    "AUTH_DATABASE_URL",
-    f"sqlite:///{DEFAULT_AUTH_DB_PATH.as_posix()}",
-)
+DATABASE_URL = os.getenv("AUTH_DATABASE_URL")
+if not DATABASE_URL:
+    DEFAULT_AUTH_DB_PATH = SERVER_ROOT / "data" / "auth.db"
+    DEFAULT_AUTH_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    DATABASE_URL = f"sqlite:///{DEFAULT_AUTH_DB_PATH.as_posix()}"
 
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(
@@ -45,10 +43,8 @@ Base = declarative_base()
 
 
 def init_auth_database() -> None:
-    # Import all model modules so that Base.metadata picks up every table.
-    from app.models import artifact as _artifact  # noqa: F401
-    from app.models import user as _user  # noqa: F401
-
+    # Import from app.models to ensure all classes are registered on Base.metadata
+    import app.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
 
 

@@ -4,7 +4,7 @@ import argparse
 
 from app.core.database import SessionLocal, init_auth_database
 from app.core.security import hash_password
-from app.models.user import User
+from app.models.user import User, UserRole
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,17 +22,24 @@ def main() -> None:
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.username == args.username).first()
+        
+        # Determine the role enum
+        try:
+            role_enum = UserRole(args.role.lower())
+        except ValueError:
+            role_enum = UserRole.ADMIN if args.role.lower() == "admin" else UserRole.OPERATOR
+
         if user is None:
             user = User(
                 username=args.username,
-                hashed_password=hash_password(args.password),
-                role=args.role,
+                password_hash=hash_password(args.password),
+                role=role_enum,
             )
             db.add(user)
             action = "created"
         else:
-            user.hashed_password = hash_password(args.password)
-            user.role = args.role
+            user.password_hash = hash_password(args.password)
+            user.role = role_enum
             action = "updated"
 
         db.commit()

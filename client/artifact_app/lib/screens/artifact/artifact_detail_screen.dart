@@ -5,32 +5,52 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/artifact.dart';
+import '../../models/artifact_status.dart';
 import '../../models/inspection.dart';
 import '../../providers/artifact_provider.dart';
 import '../../services/api_config.dart';
+import '../../services/token_storage.dart';
 import '../../theme.dart';
 import '../../widgets/responsive_scaffold.dart';
 import '../../widgets/status_badge.dart';
 import '../capture/capture_screen.dart';
 import '../inspect/result_screen.dart';
+import 'edit_artifact_screen.dart';
 
-class ArtifactDetailScreen extends StatefulWidget {
+class ArtifactDetailScreen extends StatelessWidget {
   final Artifact artifact;
 
   const ArtifactDetailScreen({super.key, required this.artifact});
 
   @override
-  State<ArtifactDetailScreen> createState() => _ArtifactDetailScreenState();
+  Widget build(BuildContext context) {
+    return _ArtifactDetailContent(artifact: artifact);
+  }
 }
 
-class _ArtifactDetailScreenState extends State<ArtifactDetailScreen> {
+class _ArtifactDetailContent extends StatefulWidget {
+  final Artifact artifact;
+  const _ArtifactDetailContent({required this.artifact});
+
+  @override
+  State<_ArtifactDetailContent> createState() => _ArtifactDetailContentState();
+}
+
+class _ArtifactDetailContentState extends State<_ArtifactDetailContent> {
   bool _busy = false;
   late Artifact _artifact;
+  String? _userRole;
 
   @override
   void initState() {
     super.initState();
     _artifact = widget.artifact;
+    _loadRole();
+  }
+
+  Future<void> _loadRole() async {
+    final role = await context.read<TokenStorage>().readRole();
+    if (mounted) setState(() => _userRole = role);
   }
 
   Future<void> _captureReference() async {
@@ -51,11 +71,6 @@ class _ArtifactDetailScreenState extends State<ArtifactDetailScreen> {
       _busy = false;
       if (updated != null) _artifact = updated;
     });
-    if (updated == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not upload reference image')),
-      );
-    }
   }
 
   Future<void> _runInspection() async {
@@ -89,17 +104,79 @@ class _ArtifactDetailScreenState extends State<ArtifactDetailScreen> {
     );
   }
 
+  Future<void> _editArtifact() async {
+    final updated = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EditArtifactScreen(artifact: _artifact),
+      ),
+    );
+    if (updated == true && mounted) {
+      await context.read<ArtifactProvider>().refresh();
+      final refreshed = context.read<ArtifactProvider>().artifacts.firstWhere((a) => a.id == _artifact.id);
+      setState(() => _artifact = refreshed);
+    }
+  }
+
+  Future<void> _archiveArtifact() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Archive Artifact'),
+        content: Text('Are you sure you want to stop displaying "${_artifact.name}"?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.orange),
+            child: const Text('Archive'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true && mounted) {
+      setState(() => _busy = true);
+      try {
+        await context.read<ArtifactProvider>().updateStatus(_artifact.id, ArtifactStatus.archived);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Artifact archived successfully')));
+          Navigator.pop(context);
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+        }
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isAdmin = _userRole == 'admin';
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_artifact.name),
         actions: [
           IconButton(
+            tooltip: 'Edit artifact',
+            icon: const Icon(Icons.edit_outlined),
+            onPressed: _editArtifact,
+          ),
+          IconButton(
             tooltip: 'Inspection history',
             icon: const Icon(Icons.history),
             onPressed: _viewHistory,
           ),
+          if (isAdmin)
+            IconButton(
+              tooltip: 'Archive artifact',
+              icon: const Icon(Icons.archive_outlined, color: Colors.orangeAccent),
+              onPressed: _archiveArtifact,
+            ),
         ],
       ),
       body: SafeArea(
@@ -132,17 +209,17 @@ class _ArtifactDetailScreenState extends State<ArtifactDetailScreen> {
                             _InfoRow(
                               icon: Icons.description_outlined,
                               title: 'Description',
-                              value: _artifact.description.isEmpty
-                                  ? '—'
-                                  : _artifact.description,
+                              value: (_artifact.description != null && _artifact.description!.isNotEmpty)
+                                  ? _artifact.description!
+                                  : '—',
                             ),
                             const Divider(height: 22),
                             _InfoRow(
                               icon: Icons.place_outlined,
                               title: 'Location',
-                              value: _artifact.location.isEmpty
-                                  ? '—'
-                                  : _artifact.location,
+                              value: (_artifact.location != null && _artifact.location!.isNotEmpty)
+                                  ? _artifact.location!
+                                  : '—',
                             ),
                           ],
                         ),
@@ -366,31 +443,30 @@ class _HistoryItem extends StatelessWidget {
           'Damage ${inspection.damageScore}%',
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        subtitle: Text(
-          _formatDate(inspection.createdAt),
-          style: const TextStyle(color: AppColors.textMuted),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _formatDate(inspection.createdAt),
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+            ),
+            Text(
+              'Type: ${inspection.inspectionType.label}',
+              style: TextStyle(
+                color: inspection.inspectionType == InspectionType.scheduled ? Colors.blue : Colors.orange,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
         ),
         trailing: StatusBadge(status: inspection.status, compact: true),
         onTap: () {
-          Navigator.pop(context);
+          Navigator.pop(context); // Close sheet
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => Scaffold(
-                appBar: AppBar(title: const Text('Inspection result')),
-                body: SafeArea(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(_formatDate(inspection.createdAt),
-                            style: const TextStyle(color: AppColors.textMuted)),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+              builder: (_) => ResultScreen(inspection: inspection),
             ),
           );
         },

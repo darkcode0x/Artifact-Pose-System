@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../services/api_client.dart';
 import '../../widgets/responsive_scaffold.dart';
 
-/// NOTE: backend currently has no /users CRUD; this screen is a UI placeholder.
 class AddUserScreen extends StatefulWidget {
   const AddUserScreen({super.key});
 
@@ -13,7 +14,8 @@ class AddUserScreen extends StatefulWidget {
 class _AddUserScreenState extends State<AddUserScreen> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
-  String _selectedRole = 'user';
+  String _selectedRole = 'operator';
+  bool _isLoading = false;
 
   @override
   void dispose() {
@@ -22,22 +24,45 @@ class _AddUserScreenState extends State<AddUserScreen> {
     super.dispose();
   }
 
-  void _handleAddUser() {
-    if (_usernameController.text.isEmpty ||
-        _passwordController.text.isEmpty) {
+  Future<void> _handleAddUser() async {
+    final username = _usernameController.text.trim();
+    final password = _passwordController.text.trim();
+
+    if (username.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill all fields')),
       );
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'User CRUD endpoint is not implemented on the server yet.',
-        ),
-      ),
-    );
-    Navigator.pop(context);
+
+    setState(() => _isLoading = true);
+
+    try {
+      final api = context.read<ApiClient>();
+      await api.post(
+        '/api/v1/users',
+        body: {
+          'username': username,
+          'password': password,
+          'role': _selectedRole,
+        },
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('User created successfully')),
+        );
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${e.toString()}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -69,7 +94,7 @@ class _AddUserScreenState extends State<AddUserScreen> {
               DropdownButtonFormField<String>(
                 value: _selectedRole,
                 items: const [
-                  DropdownMenuItem(value: 'user', child: Text('User')),
+                  DropdownMenuItem(value: 'operator', child: Text('Operator')),
                   DropdownMenuItem(value: 'admin', child: Text('Admin')),
                 ],
                 onChanged: (v) {
@@ -84,9 +109,15 @@ class _AddUserScreenState extends State<AddUserScreen> {
               SizedBox(
                 height: 50,
                 child: ElevatedButton.icon(
-                  onPressed: _handleAddUser,
-                  icon: const Icon(Icons.person_add_alt_1),
-                  label: const Text('Create user'),
+                  onPressed: _isLoading ? null : _handleAddUser,
+                  icon: _isLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.person_add_alt_1),
+                  label: Text(_isLoading ? 'Creating...' : 'Create user'),
                 ),
               ),
             ],

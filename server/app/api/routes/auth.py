@@ -17,7 +17,8 @@ def login(data: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse:
     if user is None:
         raise HTTPException(status_code=401, detail="Sai tai khoan")
 
-    if not verify_password(data.password, user.hashed_password):
+    # Changed from user.hashed_password to user.password_hash
+    if not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Sai mat khau")
 
     token = create_access_token({"sub": user.username, "role": user.role})

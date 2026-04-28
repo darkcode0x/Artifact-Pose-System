@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, ConfigDict
 
 
-ArtifactStatus = Literal["good", "need_check", "warning", "damaged", "maintenance"]
+ArtifactStatus = Literal["good", "need_check", "warning", "damaged", "maintenance", "archived"]
 
 
 class ArtifactBase(BaseModel):
@@ -17,7 +17,9 @@ class ArtifactBase(BaseModel):
 
 
 class ArtifactCreate(ArtifactBase):
-    pass
+    # Optional schedule to be created with the artifact
+    scheduled_date: datetime | None = None
+    scheduled_time: str | None = Field(default="09:00", pattern=r"^\d{2}:\d{2}$")
 
 
 class ArtifactUpdate(BaseModel):

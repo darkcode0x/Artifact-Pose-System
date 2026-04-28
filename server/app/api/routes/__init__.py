@@ -10,6 +10,7 @@ from app.api.routes import (
     pose,
     schedules,
     workflows,
+    users, # Add users
 )
 
 router = APIRouter()
@@ -22,3 +23,4 @@ router.include_router(inspections.router, tags=["inspections"])
 router.include_router(models.router, tags=["models"])
 router.include_router(pose.router, tags=["pose"])
 router.include_router(workflows.router, tags=["workflows"])
+router.include_router(users.router, tags=["users"]) # Include users router

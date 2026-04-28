@@ -43,16 +43,44 @@ class ArtifactProvider with ChangeNotifier {
     required String name,
     required String description,
     required String location,
+    DateTime? scheduledDate,
+    String? scheduledTime,
   }) async {
     try {
       final created = await _service.create(
         name: name,
         description: description,
         location: location,
+        scheduledDate: scheduledDate,
+        scheduledTime: scheduledTime,
       );
       _artifacts = [created, ..._artifacts];
       notifyListeners();
       return created;
+    } on ApiException catch (e) {
+      _error = e.message;
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<Artifact?> updateDetails(
+    int id, {
+    String? name,
+    String? description,
+    String? location,
+    ArtifactStatus? status,
+  }) async {
+    try {
+      final updated = await _service.update(
+        id,
+        name: name,
+        description: description,
+        location: location,
+        status: status,
+      );
+      _replace(updated);
+      return updated;
     } on ApiException catch (e) {
       _error = e.message;
       notifyListeners();
@@ -80,6 +108,7 @@ class ArtifactProvider with ChangeNotifier {
     } on ApiException catch (e) {
       _error = e.message;
       notifyListeners();
+      rethrow;
     }
   }
 
