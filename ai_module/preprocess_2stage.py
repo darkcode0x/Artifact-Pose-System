@@ -50,6 +50,12 @@ DST_S2 = DST / 'stage2'
 VAL_RATIO = 0.15
 MIN_TEST_PER_CLASS = 25
 
+# ===================== BRIDGE DOMAIN GAP =====================
+# Annotation style train (workspace scnpi) vs test (workspace 9wq2k) khac biet
+# (bbox size, convention) -> chuyen N anh test sang train_val pool de model hoc
+# CA 2 style. Stratified theo class de moi class deu co bridge sample.
+BRIDGE_N = 80             # so anh test bridge sang train_val (0 = tat)
+
 # ===================== ENHANCEMENT (lam noi bat damage) =====================
 # Bat = enhanced dataset. Tat = dataset goc (de A/B test).
 ENABLE_ENHANCEMENT = True
@@ -299,6 +305,55 @@ def main():
     print('\n[1/6] Load & filter HF + pre-aug...')
     tv_items = load_split(SRC_TV, 'dataset_train_2704')
     ts_items = load_split(SRC_TS, 'datatest         ')
+
+    # ---- Step 1.5: Bridge N test images sang train_val pool ----
+    # Ly do: train (workspace scnpi) vs test (workspace 9wq2k) annotation khac
+    # convention (bbox size lech 0.27x - 2.33x) -> overfit train style.
+    # Bridge: chuyen N anh test sang train_val de model hoc CA 2 style.
+    # Stratified theo class de moi class deu co bridge sample.
+    if BRIDGE_N > 0:
+        print(f'\n[1.5/6] Bridge {BRIDGE_N} test images sang train_val pool...')
+        rng_b = random.Random(SEED + 1)
+
+        # Stratify: chia ts_items theo "primary class" (class hiem nhat trong anh)
+        tv_ts_class_count = Counter()
+        for it in (tv_items + ts_items):
+            for c in it['classes']:
+                tv_ts_class_count[c] += 1
+
+        def primary_class_of(it):
+            if not it['classes']:
+                return -1
+            return min(it['classes'], key=lambda c: tv_ts_class_count[c])
+
+        groups_ts = defaultdict(list)
+        for it in ts_items:
+            groups_ts[primary_class_of(it)].append(it)
+
+        bridge_set = set()
+        n_total = len(ts_items)
+        for cls_id, items in sorted(groups_ts.items()):
+            # Phan bo BRIDGE_N theo ti le moi group, toi thieu 2 anh/group
+            n_target = max(2, int(round(len(items) * BRIDGE_N / n_total)))
+            n_target = min(n_target, len(items) - MIN_TEST_PER_CLASS // 4)  # giu lai du test
+            n_target = max(0, n_target)
+            rng_b.shuffle(items)
+            for it in items[:n_target]:
+                bridge_set.add(it['stem'])
+
+        bridge = [it for it in ts_items if it['stem'] in bridge_set]
+        ts_items = [it for it in ts_items if it['stem'] not in bridge_set]
+        tv_items.extend(bridge)
+
+        print(f'  Bridged {len(bridge)} anh: test {n_total} -> {len(ts_items)}, '
+              f'train_val pool -> {len(tv_items)}')
+        bridge_class = Counter()
+        for it in bridge:
+            for c in it['classes']:
+                bridge_class[c] += 1
+        print(f'  Bridge class distribution (instances):')
+        for cid in range(NC):
+            print(f'    {cid} {CLASS_NAMES[cid]:15s}: {bridge_class[cid]:3d}')
 
     # ---- Step 2: Test set check ----
     print('\n[2/6] Kiem tra test set...')

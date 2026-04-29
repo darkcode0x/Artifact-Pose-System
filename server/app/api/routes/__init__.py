@@ -9,11 +9,13 @@ from app.api.routes import (
     models,
     pose,
     schedules,
+    users,
     workflows,
 )
 
 router = APIRouter()
 router.include_router(auth.router, tags=["auth"])
+router.include_router(users.router, tags=["users"])
 router.include_router(health.router, tags=["health"])
 router.include_router(artifacts.router, tags=["artifacts"])
 router.include_router(schedules.router, tags=["schedules"])

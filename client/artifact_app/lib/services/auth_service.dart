@@ -33,4 +33,13 @@ class AuthService {
     final token = await _tokens.readToken();
     return token != null && token.isNotEmpty;
   }
+
+  /// Register and immediately log in. Returns the new role.
+  Future<LoginResponse> register(String username, String password) async {
+    await _api.post(
+      '/api/v1/auth/register',
+      body: {'username': username, 'password': password},
+    );
+    return login(username, password);
+  }
 }
