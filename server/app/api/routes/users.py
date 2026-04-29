@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_user, require_admin
 from app.core.database import get_db
 from app.core.security import hash_password
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.user import UserCreate, UserRead, UserUpdate
 
 router = APIRouter(prefix="/api/v1/users")
@@ -23,7 +23,7 @@ def list_users(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> list[UserRead]:
-    users = db.query(User).order_by(User.id.asc()).all()
+    users = db.query(User).order_by(User.user_id.asc()).all()
     return [UserRead.model_validate(u) for u in users]
 
 
@@ -39,8 +39,9 @@ def create_user(
 
     user = User(
         username=payload.username,
-        hashed_password=hash_password(payload.password),
+        password_hash=hash_password(payload.password),
         role=payload.role,
+        is_active=True,
     )
     db.add(user)
     try:
@@ -59,15 +60,15 @@ def update_user(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ) -> UserRead:
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.user_id == user_id).first()
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
-    is_admin = current.role == "admin"
-    is_self = current.id == user.id
+    is_admin = current.role == UserRole.ADMIN
+    is_self = current.user_id == user.user_id
 
     data = payload.model_dump(exclude_unset=True)
-    if "role" in data:
+    if "role" in data and data["role"] is not None:
         if not is_admin:
             raise HTTPException(status_code=403, detail="Only admin can change role")
         user.role = data["role"]
@@ -76,7 +77,7 @@ def update_user(
             raise HTTPException(
                 status_code=403, detail="Only admin or owner can change password"
             )
-        user.hashed_password = hash_password(data["password"])
+        user.password_hash = hash_password(data["password"])
 
     db.commit()
     db.refresh(user)
@@ -89,10 +90,42 @@ def delete_user(
     db: Session = Depends(get_db),
     current: User = Depends(require_admin),
 ) -> None:
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.user_id == user_id).first()
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
-    if user.id == current.id:
+    if user.user_id == current.user_id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     db.delete(user)
     db.commit()
+
+
+@router.patch("/{user_id}/toggle-active", response_model=UserRead)
+def toggle_user_active(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current: User = Depends(require_admin),
+) -> UserRead:
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.user_id == current.user_id:
+        raise HTTPException(status_code=400, detail="Cannot deactivate yourself")
+    user.is_active = not user.is_active
+    db.commit()
+    db.refresh(user)
+    return UserRead.model_validate(user)
+
+
+@router.post("/{user_id}/reset-password", response_model=UserRead)
+def reset_user_password(
+    user_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> UserRead:
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.password_hash = hash_password("111111")
+    db.commit()
+    db.refresh(user)
+    return UserRead.model_validate(user)

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/artifact.dart';
 import '../../providers/artifact_provider.dart';
 import '../../services/api_config.dart';
+import '../../services/token_storage.dart';
 import '../../theme.dart';
 import '../../widgets/responsive_scaffold.dart';
 import '../../widgets/status_badge.dart';
@@ -18,17 +19,26 @@ class ArtifactListScreen extends StatefulWidget {
 }
 
 class _ArtifactListScreenState extends State<ArtifactListScreen> {
+  String? _userRole;
+
   @override
   void initState() {
     super.initState();
+    _loadRole();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ArtifactProvider>().refresh();
     });
   }
 
+  Future<void> _loadRole() async {
+    final role = await context.read<TokenStorage>().readRole();
+    if (mounted) setState(() => _userRole = role);
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<ArtifactProvider>();
+    final isAdmin = _userRole == 'admin';
 
     return Scaffold(
       appBar: AppBar(title: const Text('Artifacts')),
@@ -39,21 +49,23 @@ class _ArtifactListScreenState extends State<ArtifactListScreen> {
           child: _buildBody(provider),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        onPressed: () async {
-          final created = await Navigator.push<bool>(
-            context,
-            MaterialPageRoute(builder: (_) => const AddArtifactScreen()),
-          );
-          if (created == true && mounted) {
-            await context.read<ArtifactProvider>().refresh();
-          }
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('New artifact'),
-      ),
+      floatingActionButton: isAdmin
+          ? FloatingActionButton.extended(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              onPressed: () async {
+                final created = await Navigator.push<bool>(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AddArtifactScreen()),
+                );
+                if (created == true && mounted) {
+                  await context.read<ArtifactProvider>().refresh();
+                }
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('New artifact'),
+            )
+          : null,
     );
   }
 
@@ -71,7 +83,7 @@ class _ArtifactListScreenState extends State<ArtifactListScreen> {
       return const EmptyStateView(
         icon: Icons.inventory_2_outlined,
         title: 'No artifacts yet',
-        subtitle: 'Tap "New artifact" to add the first one.',
+        subtitle: 'No artifacts found in the system.',
       );
     }
     return ListView.separated(
@@ -91,6 +103,9 @@ class _ArtifactCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final location = artifact.location;
+    final hasLocation = location != null && location.isNotEmpty;
+
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
@@ -99,7 +114,7 @@ class _ArtifactCard extends StatelessWidget {
           MaterialPageRoute(
             builder: (_) => ArtifactDetailScreen(artifact: artifact),
           ),
-        ),
+        ).then((_) => context.read<ArtifactProvider>().refresh()),
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Row(
@@ -130,7 +145,7 @@ class _ArtifactCard extends StatelessWidget {
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
-                            artifact.location.isEmpty ? '—' : artifact.location,
+                            hasLocation ? location : '—',
                             style: const TextStyle(color: AppColors.textMuted),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,

@@ -1,9 +1,17 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
+
 class ApiConfig {
-  // Pass --dart-define=API_BASE_URL=https://your-backend at build time.
-  // Default 10.0.2.2 lets the Android emulator reach the host machine.
+  // IP của máy tính chạy Server trong mạng nội bộ (Dành cho điện thoại thật)
+  // Theo log gần nhất của bạn là 192.168.1.151 (hoặc 192.168.1.149 tùy thời điểm)
+  static const String _pcIp = '192.168.1.151';
+
+  static const String _defaultUrl = kIsWeb
+      ? 'http://127.0.0.1:8000'
+      : 'http://$_pcIp:8000';
+
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000',
+    defaultValue: _defaultUrl,
   );
 
   static Uri uri(String path, [Map<String, dynamic>? query]) {
@@ -21,7 +29,6 @@ class ApiConfig {
     );
   }
 
-  /// Resolve a server-relative path (e.g. "/uploads/foo.jpg") into a full URL.
   static String resolveAssetUrl(String? path) {
     if (path == null || path.isEmpty) return '';
     if (path.startsWith('http://') || path.startsWith('https://')) return path;

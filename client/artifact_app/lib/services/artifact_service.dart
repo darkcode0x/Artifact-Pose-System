@@ -41,12 +41,16 @@ class ArtifactService {
     required String description,
     required String location,
     ArtifactStatus status = ArtifactStatus.good,
+    DateTime? scheduledDate,
+    String? scheduledTime,
   }) async {
     final body = await _api.post('/api/v1/artifacts', body: {
       'name': name,
       'description': description,
       'location': location,
       'status': status.wireValue,
+      if (scheduledDate != null) 'scheduled_date': scheduledDate.toIso8601String(),
+      if (scheduledTime != null) 'scheduled_time': scheduledTime,
     });
     return Artifact.fromJson(body as Map<String, dynamic>);
   }

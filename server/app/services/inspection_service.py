@@ -9,7 +9,10 @@ from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.models.artifact import Artifact, Inspection
+from app.models.artifact import (
+    Artifact, Image, ImageComparison, ImageType, 
+    ComparisonStatus, Alert, AlertLevel, InspectionType, Schedule
+)
 from app.services.command_service import CommandService
 from app.services.model_service import ModelService
 from app.services.mqtt_bridge import MqttBridge
@@ -463,8 +466,8 @@ class InspectionService:
     def _artifact_uploads_dir(self) -> Path:
         return self._settings.uploads_dir / "artifacts"
 
-    async def save_reference_image(self, artifact_id: int, file: UploadFile) -> Path:
-        """Persist a reference image for an artifact under uploads/artifacts/<id>/."""
+    async def save_reference_image(self, artifact_id: int, file: UploadFile, operator_id: int | None = None) -> Image:
+        """Persist a reference image for an artifact and create an Image record."""
         target_dir = self._artifact_uploads_dir / str(artifact_id)
         target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -474,7 +477,14 @@ class InspectionService:
 
         content = await file.read()
         target_path.write_bytes(content)
-        return target_path
+        
+        return Image(
+            artifact_id=artifact_id,
+            operator_id=operator_id,
+            image_type=ImageType.BASELINE,
+            image_path=str(target_path),
+            is_valid=True
+        )
 
     def run_artifact_inspection(
         self,
@@ -484,13 +494,16 @@ class InspectionService:
         image_bytes: bytes,
         original_filename: str,
         description: str = "",
-        created_by: str | None = None,
-    ) -> Inspection:
+        operator_id: int | None = None,
+        device_id: int | None = None,
+        inspection_type: InspectionType = InspectionType.SUDDEN,
+        schedule_id: int | None = None,
+    ) -> ImageComparison:
         """
         Save the new image, compare with the artifact's reference, persist an
-        Inspection record, and update the artifact status if needed.
+        Image record and an ImageComparison record.
         """
-        target_dir = self._artifact_uploads_dir / str(artifact.id)
+        target_dir = self._artifact_uploads_dir / str(artifact.artifact_id)
         target_dir.mkdir(parents=True, exist_ok=True)
 
         ts_ms = int(time.time() * 1000)
@@ -498,54 +511,87 @@ class InspectionService:
         current_path = target_dir / f"inspection_{ts_ms}_{safe_name}"
         current_path.write_bytes(image_bytes)
 
-        reference_path = (
-            Path(artifact.reference_image_path)
-            if artifact.reference_image_path
-            else None
+        # Create Image record for current capture
+        current_image = Image(
+            artifact_id=artifact.artifact_id,
+            device_id=device_id,
+            operator_id=operator_id,
+            image_type=ImageType.INSPECTION,
+            image_path=str(current_path),
+            is_valid=True
         )
+        db.add(current_image)
+        db.flush()
 
+        # Get baseline image path
+        reference_path = None
+        previous_image_id = None
+        if artifact.baseline_image:
+            reference_path = Path(artifact.baseline_image.image_path)
+            previous_image_id = artifact.baseline_image.image_id
+        
         analysis = self._analyze_against_reference(
             current_path=current_path,
             reference_path=reference_path,
-            artifact_id=artifact.id,
+            artifact_id=artifact.artifact_id,
             ts_ms=ts_ms,
         )
 
-        damage_score = int(round(analysis["damage_score"]))
-        damage_score = max(0, min(100, damage_score))
+        damage_score = float(analysis["damage_score"])
         status = self._classify_damage_status(damage_score, analysis.get("ssim"))
 
-        record = Inspection(
-            artifact_id=artifact.id,
-            previous_image_path=str(reference_path) if reference_path else None,
-            current_image_path=str(current_path),
-            heatmap_path=analysis.get("heatmap_path"),
+        # Create Comparison
+        comparison = ImageComparison(
+            artifact_id=artifact.artifact_id,
+            previous_image_id=previous_image_id or current_image.image_id,
+            current_image_id=current_image.image_id,
+            schedule_id=schedule_id,
             damage_score=damage_score,
             ssim_score=(
                 f"{analysis['ssim']:.4f}" if analysis.get("ssim") is not None else None
             ),
+            heatmap_path=analysis.get("heatmap_path"),
             status=status,
+            inspection_type=inspection_type,
             description=description or analysis.get("auto_description", ""),
             detections_json=analysis.get("detections_json"),
-            created_by=created_by,
         )
-        db.add(record)
+        db.add(comparison)
+        
+        # If this is a scheduled inspection, mark the schedule as completed
+        if schedule_id:
+            schedule = db.query(Schedule).get(schedule_id)
+            if schedule:
+                schedule.completed = True
 
-        # Promote artifact status if this inspection found something worse than current.
-        artifact.status = self._merge_artifact_status(artifact.status, status)
+        db.flush()
+
+        # Handle Alerts
+        if status in [ComparisonStatus.WARNING, ComparisonStatus.DAMAGED]:
+            alert_level = AlertLevel.HIGH if status == ComparisonStatus.DAMAGED else AlertLevel.MEDIUM
+            alert = Alert(
+                artifact_id=artifact.artifact_id,
+                comparison_id=comparison.comparison_id,
+                alert_level=alert_level,
+                is_handled=False
+            )
+            db.add(alert)
+
+        # Update artifact status
+        artifact.status = self._merge_artifact_status(artifact.status, status.value)
         db.commit()
-        db.refresh(record)
-        return record
+        db.refresh(comparison)
+        return comparison
 
     @staticmethod
-    def _classify_damage_status(damage_score: int, ssim: float | None) -> str:
+    def _classify_damage_status(damage_score: float, ssim: float | None) -> ComparisonStatus:
         if ssim is not None and ssim > 0.95 and damage_score < 5:
-            return "good"
+            return ComparisonStatus.GOOD
         if damage_score < 15 and (ssim is None or ssim > 0.85):
-            return "good"
+            return ComparisonStatus.GOOD
         if damage_score < 35:
-            return "warning"
-        return "damaged"
+            return ComparisonStatus.WARNING
+        return ComparisonStatus.DAMAGED
 
     @staticmethod
     def _merge_artifact_status(current: str, new_status: str) -> str:
@@ -562,10 +608,6 @@ class InspectionService:
         artifact_id: int,
         ts_ms: int,
     ) -> dict[str, Any]:
-        """
-        Lightweight damage analysis using OpenCV. Returns dict with damage_score
-        (0-100), optional ssim, optional heatmap_path, auto_description.
-        """
         if reference_path is None or not reference_path.exists():
             return {
                 "damage_score": 0.0,
@@ -577,7 +619,6 @@ class InspectionService:
 
         try:
             import cv2
-            import numpy as np
         except Exception:
             return {
                 "damage_score": 0.0,
@@ -598,7 +639,6 @@ class InspectionService:
                 "detections_json": None,
             }
 
-        # Resize current to reference shape (a real pipeline would align with SIFT).
         h, w = reference.shape[:2]
         if current.shape[:2] != (h, w):
             current = cv2.resize(current, (w, h))
@@ -613,20 +653,15 @@ class InspectionService:
 
         damage_pct = float(cv2.countNonZero(mask)) / float(h * w) * 100.0
 
-        # Heatmap visualization for the client to display.
         heatmap = cv2.applyColorMap(diff_blur, cv2.COLORMAP_JET)
         overlay = cv2.addWeighted(current, 0.6, heatmap, 0.4, 0)
         heatmap_path = current_path.parent / f"heatmap_{ts_ms}.jpg"
         cv2.imwrite(str(heatmap_path), overlay)
 
-        # Optional structural similarity if scikit-image is available.
         ssim_value: float | None = None
         try:
             from skimage.metrics import structural_similarity
-
-            ssim_value = float(
-                structural_similarity(gray_ref, gray_cur, win_size=7)
-            )
+            ssim_value = float(structural_similarity(gray_ref, gray_cur, win_size=7))
         except Exception:
             ssim_value = None
 
@@ -651,7 +686,6 @@ class InspectionService:
         reason: str | None = None,
         iteration: int | None = None,
     ) -> None:
-        """Gui signal alignment_complete hoac alignment_failed qua MQTT toi Pi."""
         payload: dict[str, Any] = {
             "action": action,
             "task_id": self._command_service.build_task_id(),

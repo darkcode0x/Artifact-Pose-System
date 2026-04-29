@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from typing import Literal
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-UserRole = Literal["admin", "operator", "user"]
+from app.models.user import UserRole
 
 
 class UserBase(BaseModel):
     username: str = Field(min_length=3, max_length=64)
-    role: UserRole = "user"
+    role: UserRole = UserRole.OPERATOR
 
 
 class UserCreate(UserBase):
@@ -21,9 +21,14 @@ class UserUpdate(BaseModel):
     role: UserRole | None = None
 
 
-class UserRead(UserBase):
+class UserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: int
+
+    user_id: int
+    username: str
+    role: UserRole
+    is_active: bool
+    created_at: datetime
 
 
 class RegisterRequest(BaseModel):

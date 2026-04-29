@@ -9,11 +9,11 @@ class UserProvider with ChangeNotifier {
 
   UserProvider(this._service);
 
-  List<AppUser> _users = const [];
+  List<User> _users = const [];
   bool _loading = false;
   String? _error;
 
-  List<AppUser> get users => _users;
+  List<User> get users => _users;
   bool get isLoading => _loading;
   String? get error => _error;
 
@@ -33,10 +33,10 @@ class UserProvider with ChangeNotifier {
     }
   }
 
-  Future<AppUser?> create({
+  Future<User?> create({
     required String username,
     required String password,
-    required String role,
+    required UserRole role,
   }) async {
     try {
       final created = await _service.create(
@@ -55,7 +55,7 @@ class UserProvider with ChangeNotifier {
   Future<bool> remove(int id) async {
     try {
       await _service.delete(id);
-      _users = _users.where((u) => u.id != id).toList();
+      _users = _users.where((u) => u.userId != id).toList();
       notifyListeners();
       return true;
     } on ApiException {
@@ -63,10 +63,23 @@ class UserProvider with ChangeNotifier {
     }
   }
 
-  Future<AppUser?> updateRole(int id, String role) async {
+  Future<User?> updateRole(int id, UserRole role) async {
     try {
       final updated = await _service.update(id, role: role);
-      _users = _users.map((u) => u.id == id ? updated : u).toList();
+      _users =
+          _users.map((u) => u.userId == id ? updated : u).toList();
+      notifyListeners();
+      return updated;
+    } on ApiException {
+      rethrow;
+    }
+  }
+
+  Future<User?> toggleActive(int id) async {
+    try {
+      final updated = await _service.toggleActive(id);
+      _users =
+          _users.map((u) => u.userId == id ? updated : u).toList();
       notifyListeners();
       return updated;
     } on ApiException {
