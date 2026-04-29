@@ -1,40 +1,39 @@
-enum DeviceStatus {
-  online,
-  offline;
-
-  static DeviceStatus fromWire(String? value) {
-    if (value == 'online') return DeviceStatus.online;
-    return DeviceStatus.offline;
-  }
-}
-
+/// Lightweight model that mirrors what the backend actually returns from
+/// `GET /devices` and `GET /devices/{id}/status`. The backend keeps device
+/// state in memory (not in DB), so most fields are best-effort.
 class IotDevice {
-  final int deviceId;
-  final String deviceCode;
-  final String? description;
-  final DeviceStatus status;
-  final DateTime createdAt;
-  final DateTime? lastActiveAt;
+  final String deviceId;
+  final String machineHash;
+  final Map<String, dynamic> status;
 
-  IotDevice({
+  const IotDevice({
     required this.deviceId,
-    required this.deviceCode,
-    this.description,
-    required this.status,
-    required this.createdAt,
-    this.lastActiveAt,
+    required this.machineHash,
+    this.status = const {},
   });
 
+  /// True if the in-memory command service has any liveness signal for this
+  /// device (last seen / pending acks). False otherwise.
+  bool get isOnline {
+    if (status.isEmpty) return false;
+    final lastSeen = status['last_seen'] ?? status['last_active_at'];
+    if (lastSeen != null) return true;
+    return status['online'] == true;
+  }
+
+  String? get lastSeenIso {
+    final v = status['last_seen'] ?? status['last_active_at'];
+    return v is String ? v : null;
+  }
+
   factory IotDevice.fromJson(Map<String, dynamic> json) {
+    final rawStatus = json['status'];
     return IotDevice(
-      deviceId: json['device_id'] as int,
-      deviceCode: json['device_code'] as String,
-      description: json['description'] as String?,
-      status: DeviceStatus.fromWire(json['status'] as String?),
-      createdAt: DateTime.parse(json['created_at'] as String),
-      lastActiveAt: json['last_active_at'] != null 
-          ? DateTime.parse(json['last_active_at'] as String)
-          : null,
+      deviceId: json['device_id'] as String,
+      machineHash: (json['machine_hash'] as String?) ?? '',
+      status: rawStatus is Map<String, dynamic>
+          ? rawStatus
+          : const <String, dynamic>{},
     );
   }
 }

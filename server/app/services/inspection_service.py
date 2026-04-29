@@ -498,6 +498,7 @@ class InspectionService:
         device_id: int | None = None,
         inspection_type: InspectionType = InspectionType.SUDDEN,
         schedule_id: int | None = None,
+        created_by: str | None = None,
     ) -> ImageComparison:
         """
         Save the new image, compare with the artifact's reference, persist an
@@ -555,6 +556,7 @@ class InspectionService:
             inspection_type=inspection_type,
             description=description or analysis.get("auto_description", ""),
             detections_json=analysis.get("detections_json"),
+            created_by=(created_by or "").strip() or None,
         )
         db.add(comparison)
         

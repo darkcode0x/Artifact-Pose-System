@@ -7,7 +7,9 @@ from app.schemas.devices import (
     DeviceAcksResponse,
     DeviceIdRequest,
     DeviceIdResponse,
+    DeviceListResponse,
     DeviceStatusResponse,
+    DeviceSummary,
     MoveCommand,
     MoveCommandRequest,
     QueueMoveResponse,
@@ -15,6 +17,22 @@ from app.schemas.devices import (
 from app.services.state import AppContainer
 
 router = APIRouter()
+
+
+@router.get("/devices", response_model=DeviceListResponse)
+def list_devices(
+    container: AppContainer = Depends(get_container),
+) -> DeviceListResponse:
+    entries = container.device_registry.list_all()
+    summaries = [
+        DeviceSummary(
+            device_id=entry["device_id"],
+            machine_hash=entry["machine_hash"],
+            status=container.command_service.get_status(entry["device_id"]),
+        )
+        for entry in entries
+    ]
+    return DeviceListResponse(ok=True, count=len(summaries), devices=summaries)
 
 
 @router.post("/devices/get_device_id", response_model=DeviceIdResponse)

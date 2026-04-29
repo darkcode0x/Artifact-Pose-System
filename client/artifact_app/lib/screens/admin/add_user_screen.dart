@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/user.dart';
 import '../../services/api_client.dart';
+import '../../services/user_service.dart';
 import '../../widgets/responsive_scaffold.dart';
 
 class AddUserScreen extends StatefulWidget {
@@ -38,14 +40,12 @@ class _AddUserScreenState extends State<AddUserScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final api = context.read<ApiClient>();
-      await api.post(
-        '/api/v1/users',
-        body: {
-          'username': username,
-          'password': password,
-          'role': _selectedRole,
-        },
+      final service = UserService(context.read<ApiClient>());
+      final role = _selectedRole == 'admin' ? UserRole.admin : UserRole.operator;
+      await service.create(
+        username: username,
+        password: password,
+        role: role,
       );
 
       if (mounted) {
@@ -53,6 +53,12 @@ class _AddUserScreenState extends State<AddUserScreen> {
           const SnackBar(content: Text('User created successfully')),
         );
         Navigator.pop(context);
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
       }
     } catch (e) {
       if (mounted) {

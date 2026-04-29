@@ -71,3 +71,15 @@ class DeviceAcksResponse(BaseModel):
     device_id: str
     count: int
     acks: list[dict[str, Any]]
+
+
+class DeviceSummary(BaseModel):
+    device_id: str
+    machine_hash: str
+    status: dict[str, Any] | None = None
+
+
+class DeviceListResponse(BaseModel):
+    ok: bool
+    count: int
+    devices: list[DeviceSummary]

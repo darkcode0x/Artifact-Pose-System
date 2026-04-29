@@ -97,6 +97,7 @@ class ImageComparison(Base):
     inspection_type = Column(Enum(InspectionType), default=InspectionType.SUDDEN, nullable=False)
     description = Column(Text, nullable=True)
     detections_json = Column(Text, nullable=True)
+    created_by = Column(String(100), nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utc_now, nullable=False)
 
     artifact = relationship("Artifact", back_populates="comparisons")

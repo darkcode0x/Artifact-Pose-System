@@ -63,7 +63,7 @@ def _serialize_comparison(record: ImageComparison) -> InspectionRead:
         description=record.description or "",
         detections_json=record.detections_json,
         created_at=record.created_at,
-        created_by=None
+        created_by=record.created_by,
     )
 
 
@@ -243,6 +243,7 @@ async def inspect_artifact(
             description=description,
             inspection_type=itype,
             schedule_id=schedule_id,
+            created_by=created_by or None,
         )
         return _serialize_comparison(record)
     except Exception as e:

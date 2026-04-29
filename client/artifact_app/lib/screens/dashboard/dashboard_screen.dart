@@ -7,6 +7,7 @@ import '../../theme.dart';
 import '../../widgets/responsive_scaffold.dart';
 import '../alerts/alert_screen.dart';
 import '../artifact/artifact_list_screen.dart';
+import '../devices/device_list_screen.dart';
 import '../schedule/schedule_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -103,10 +104,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             _ActionCard(
                               icon: Icons.settings_outlined,
                               title: 'Devices',
-                              onTap: () => ScaffoldMessenger.of(context)
-                                  .showSnackBar(const SnackBar(
-                                content: Text('Device management coming soon'),
-                              )),
+                              onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const DeviceListScreen(),
+                                ),
+                              ),
                             ),
                           ],
                         );

@@ -64,15 +64,4 @@ class UserService {
     final body = await _api.post('/api/v1/users/$id/reset-password');
     return User.fromJson(body as Map<String, dynamic>);
   }
-
-  Future<User> register({
-    required String username,
-    required String password,
-  }) async {
-    final body = await _api.post('/api/v1/auth/register', body: {
-      'username': username,
-      'password': password,
-    });
-    return User.fromJson(body as Map<String, dynamic>);
-  }
 }
