@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
@@ -63,9 +61,11 @@ class _ArtifactDetailContentState extends State<_ArtifactDetailContent> {
     if (picked == null || !mounted) return;
 
     setState(() => _busy = true);
+    // Sửa lỗi: Truyền picked (XFile) trực tiếp
     final updated = await context
         .read<ArtifactProvider>()
-        .uploadReference(_artifact.id, File(picked.path));
+        .uploadReference(_artifact.id, picked);
+        
     if (!mounted) return;
     setState(() {
       _busy = false;
@@ -228,8 +228,8 @@ class _ArtifactDetailContentState extends State<_ArtifactDetailContent> {
                     const SizedBox(height: 24),
                     if (!_artifact.hasImage)
                       _CallToAction(
-                        icon: Icons.camera_alt_outlined,
-                        label: 'Capture reference image',
+                        icon: Icons.settings_remote,
+                        label: 'Trigger Device Camera (Reference)',
                         onPressed: _captureReference,
                       )
                     else

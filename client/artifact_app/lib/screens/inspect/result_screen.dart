@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-
+import 'package:intl/intl.dart';
 import '../../models/inspection.dart';
 import '../../services/api_config.dart';
 import '../../theme.dart';
@@ -14,53 +14,15 @@ class ResultScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Inspection result')),
+      appBar: AppBar(title: const Text('Inspection Result')),
       body: SafeArea(
         child: ResponsiveBody(
           padding: const EdgeInsets.all(16),
           child: ListView(
             children: [
-              StatusBadge(status: inspection.status),
-              const SizedBox(height: 16),
-              _ScoreCard(inspection: inspection),
-              const SizedBox(height: 16),
-              if (inspection.previousImagePath != null) ...[
-                const _SectionLabel('Reference'),
-                _ImagePanel(url: inspection.previousImagePath!),
-                const SizedBox(height: 16),
-              ],
-              const _SectionLabel('Captured image'),
-              _ImagePanel(url: inspection.currentImagePath),
-              const SizedBox(height: 16),
-              if (inspection.heatmapPath != null) ...[
-                const _SectionLabel('Damage heatmap'),
-                _ImagePanel(url: inspection.heatmapPath!),
-                const SizedBox(height: 16),
-              ],
-              if (inspection.description.isNotEmpty) ...[
-                const _SectionLabel('Notes'),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Text(inspection.description),
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ],
-              Text(
-                'Inspected ${_formatDate(inspection.createdAt)}'
-                '${inspection.createdBy != null ? ' by ${inspection.createdBy}' : ''}',
-                style: const TextStyle(color: AppColors.textMuted),
-              ),
+              _buildImageComparison(),
               const SizedBox(height: 24),
-              SizedBox(
-                height: 50,
-                child: ElevatedButton.icon(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.check),
-                  label: const Text('Done'),
-                ),
-              ),
+              _buildDetailCard(context),
             ],
           ),
         ),
@@ -68,128 +30,71 @@ class ResultScreen extends StatelessWidget {
     );
   }
 
-  String _formatDate(DateTime dt) {
-    final local = dt.toLocal();
-    return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} '
-        '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+  Widget _buildImageComparison() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Heatmap Analysis', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(20),
+          child: AspectRatio(
+            aspectRatio: 16 / 9,
+            child: inspection.heatmapPath != null
+                ? Image.network(
+                    ApiConfig.resolveAssetUrl(inspection.heatmapPath),
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _imagePlaceholder(Icons.broken_image),
+                  )
+                : _imagePlaceholder(Icons.analytics_outlined),
+          ),
+        ),
+      ],
+    );
   }
-}
 
-class _ScoreCard extends StatelessWidget {
-  final Inspection inspection;
-  const _ScoreCard({required this.inspection});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildDetailCard(BuildContext context) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Row(
+        child: Column(
           children: [
-            Expanded(
-              child: _Metric(
-                label: 'Damage',
-                value: '${inspection.damageScore}%',
-                color: _scoreColor(inspection.damageScore),
-              ),
-            ),
-            Container(width: 1, height: 40, color: AppColors.surfaceMuted),
-            Expanded(
-              child: _Metric(
-                label: 'SSIM',
-                value: inspection.ssimScore ?? '—',
-                color: AppColors.primary,
-              ),
-            ),
+            _dataRow('Status', StatusBadge(status: inspection.status)),
+            const Divider(height: 32),
+            _dataRow('Damage Score', Text('${inspection.damageScore}%', 
+              style: TextStyle(
+                fontSize: 20, 
+                fontWeight: FontWeight.bold,
+                color: inspection.damageScore > 15 ? Colors.red : Colors.green
+              ))),
+            const Divider(height: 32),
+            _dataRow('Inspection Type', Text(inspection.inspectionType.label)),
+            const Divider(height: 32),
+            _dataRow('Date', Text(DateFormat('HH:mm dd/MM/yyyy').format(inspection.createdAt))),
+            if (inspection.description.isNotEmpty) ...[
+              const Divider(height: 32),
+              _dataRow('Notes', Text(inspection.description, textAlign: TextAlign.right)),
+            ],
           ],
         ),
       ),
     );
   }
 
-  Color _scoreColor(int score) {
-    if (score < 15) return AppColors.statusGood;
-    if (score < 35) return AppColors.statusWarning;
-    return AppColors.statusDamaged;
-  }
-}
-
-class _Metric extends StatelessWidget {
-  final String label;
-  final String value;
-  final Color color;
-
-  const _Metric({
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
+  Widget _dataRow(String label, Widget value) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 26,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(label, style: const TextStyle(color: AppColors.textMuted)),
+        Text(label, style: const TextStyle(color: AppColors.textMuted, fontWeight: FontWeight.w500)),
+        Flexible(child: value),
       ],
     );
   }
-}
 
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  const _SectionLabel(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Text(
-        text,
-        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-      ),
-    );
-  }
-}
-
-class _ImagePanel extends StatelessWidget {
-  final String url;
-  const _ImagePanel({required this.url});
-
-  @override
-  Widget build(BuildContext context) {
-    final resolved = ApiConfig.resolveAssetUrl(url);
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: AspectRatio(
-        aspectRatio: 16 / 9,
-        child: Image.network(
-          resolved,
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => Container(
-            color: AppColors.surfaceMuted,
-            child: const Center(
-              child: Icon(Icons.broken_image_outlined,
-                  color: AppColors.textFaint, size: 48),
-            ),
-          ),
-          loadingBuilder: (_, child, progress) {
-            if (progress == null) return child;
-            return Container(
-              color: AppColors.surfaceMuted,
-              child: const Center(child: CircularProgressIndicator()),
-            );
-          },
-        ),
-      ),
+  Widget _imagePlaceholder(IconData icon) {
+    return Container(
+      color: AppColors.surfaceMuted,
+      child: Center(child: Icon(icon, size: 48, color: AppColors.textFaint)),
     );
   }
 }

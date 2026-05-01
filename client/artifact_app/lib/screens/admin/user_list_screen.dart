@@ -31,7 +31,7 @@ class _UserListScreenState extends State<UserListScreen> {
         if (body is List) {
           return body.map((json) => User.fromJson(json as Map<String, dynamic>)).toList();
         }
-        return [];
+        return <User>[];
       });
     });
   }
@@ -42,10 +42,7 @@ class _UserListScreenState extends State<UserListScreen> {
       appBar: AppBar(
         title: const Text('User Management'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadUsers,
-          ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadUsers),
         ],
       ),
       body: ResponsiveBody(
@@ -53,16 +50,11 @@ class _UserListScreenState extends State<UserListScreen> {
         child: FutureBuilder<List<User>>(
           future: _usersFuture,
           builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              return Center(child: Text('Error: ${snapshot.error}'));
-            }
+            if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+            if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}'));
+            
             final users = snapshot.data ?? [];
-            if (users.isEmpty) {
-              return const Center(child: Text('No users found'));
-            }
+            if (users.isEmpty) return const Center(child: Text('No users found.'));
 
             return ListView.separated(
               itemCount: users.length,
@@ -76,12 +68,9 @@ class _UserListScreenState extends State<UserListScreen> {
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         icon: const Icon(Icons.person_add),
-        label: const Text('Add user'),
+        label: const Text('Add User'),
         onPressed: () async {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const AddUserScreen()),
-          );
+          await Navigator.push(context, MaterialPageRoute(builder: (_) => const AddUserScreen()));
           _loadUsers();
         },
       ),
@@ -91,30 +80,19 @@ class _UserListScreenState extends State<UserListScreen> {
   Widget _userCard(User user) {
     return Card(
       child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         leading: CircleAvatar(
-          backgroundColor:
-              user.role == UserRole.admin ? Colors.orange : AppColors.primary,
+          backgroundColor: user.isAdmin ? Colors.orange : AppColors.primary,
           child: const Icon(Icons.person, color: Colors.white),
         ),
         title: Text(
-          user.username,
+          (user.fullName != null && user.fullName!.isNotEmpty) ? user.fullName! : user.username,
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        subtitle: Text('Role: ${user.role.name}'),
-        trailing: Icon(
-          Icons.circle,
-          size: 12,
-          color: user.isActive ? Colors.green : Colors.grey,
-        ),
+        subtitle: Text('Role: ${user.role.name.toUpperCase()}'),
+        trailing: Icon(Icons.circle, size: 12, color: user.isActive ? Colors.green : Colors.grey),
         onTap: () async {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => UserDetailScreen(user: user),
-            ),
-          );
-          _loadUsers(); // Refresh list when coming back from details
+          await Navigator.push(context, MaterialPageRoute(builder: (context) => UserDetailScreen(user: user)));
+          _loadUsers();
         },
       ),
     );

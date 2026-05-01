@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:image_picker/image_picker.dart';
 
 import '../models/artifact.dart';
 import '../models/artifact_status.dart';
@@ -31,7 +31,7 @@ class ArtifactService {
         .toList();
   }
 
-  Future<Artifact> get(int id) async {
+  Future<Artifact> get(String id) async {
     final body = await _api.get('/api/v1/artifacts/$id');
     return Artifact.fromJson(body as Map<String, dynamic>);
   }
@@ -41,6 +41,7 @@ class ArtifactService {
     required String description,
     required String location,
     ArtifactStatus status = ArtifactStatus.good,
+    int inspectionIntervalDays = 0,
     DateTime? scheduledDate,
     String? scheduledTime,
   }) async {
@@ -49,6 +50,7 @@ class ArtifactService {
       'description': description,
       'location': location,
       'status': status.wireValue,
+      'inspection_interval_days': inspectionIntervalDays,
       if (scheduledDate != null) 'scheduled_date': scheduledDate.toIso8601String(),
       if (scheduledTime != null) 'scheduled_time': scheduledTime,
     });
@@ -56,27 +58,31 @@ class ArtifactService {
   }
 
   Future<Artifact> update(
-    int id, {
+    String id, {
     String? name,
     String? description,
     String? location,
     ArtifactStatus? status,
+    int? inspectionIntervalDays,
   }) async {
     final patch = <String, dynamic>{};
     if (name != null) patch['name'] = name;
     if (description != null) patch['description'] = description;
     if (location != null) patch['location'] = location;
     if (status != null) patch['status'] = status.wireValue;
+    if (inspectionIntervalDays != null) {
+      patch['inspection_interval_days'] = inspectionIntervalDays;
+    }
 
     final body = await _api.patch('/api/v1/artifacts/$id', body: patch);
     return Artifact.fromJson(body as Map<String, dynamic>);
   }
 
-  Future<void> delete(int id) async {
+  Future<void> delete(String id) async {
     await _api.delete('/api/v1/artifacts/$id');
   }
 
-  Future<Artifact> uploadReference(int id, File image) async {
+  Future<Artifact> uploadReference(String id, XFile image) async {
     final body = await _api.postMultipart(
       '/api/v1/artifacts/$id/reference',
       file: image,
@@ -85,13 +91,15 @@ class ArtifactService {
   }
 
   Future<Inspection> inspect(
-    int id, {
-    required File image,
+    String id, {
+    required XFile image,
     String description = '',
     String? createdBy,
+    String? scheduleId,
   }) async {
     final fields = <String, String>{'description': description};
     if (createdBy != null) fields['created_by'] = createdBy;
+    if (scheduleId != null) fields['schedule_id'] = scheduleId;
 
     final body = await _api.postMultipart(
       '/api/v1/artifacts/$id/inspect',
@@ -101,7 +109,7 @@ class ArtifactService {
     return Inspection.fromJson(body as Map<String, dynamic>);
   }
 
-  Future<List<Inspection>> inspections(int id, {int limit = 50}) async {
+  Future<List<Inspection>> inspections(String id, {int limit = 50}) async {
     final body = await _api.get(
       '/api/v1/artifacts/$id/inspections',
       query: {'limit': limit},

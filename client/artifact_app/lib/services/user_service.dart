@@ -20,7 +20,7 @@ class UserService {
         .toList();
   }
 
-  Future<User> get(int id) async {
+  Future<User> get(String id) async {
     final body = await _api.get('/api/v1/users/$id');
     return User.fromJson(body as Map<String, dynamic>);
   }
@@ -28,40 +28,84 @@ class UserService {
   Future<User> create({
     required String username,
     required String password,
-    UserRole role = UserRole.operator,
+    required UserRole role,
+    String? fullName,
+    int? age,
+    String? email,
+    String? phone,
   }) async {
     final body = await _api.post('/api/v1/users', body: {
       'username': username,
       'password': password,
       'role': role.wireValue,
+      'full_name': fullName,
+      'age': age,
+      'email': email,
+      'phone': phone,
     });
     return User.fromJson(body as Map<String, dynamic>);
   }
 
   Future<User> update(
-    int id, {
+    String id, {
     String? password,
     UserRole? role,
+    String? fullName,
+    int? age,
+    String? email,
+    String? phone,
   }) async {
     final patch = <String, dynamic>{};
     if (password != null && password.isNotEmpty) patch['password'] = password;
     if (role != null) patch['role'] = role.wireValue;
+    if (fullName != null) patch['full_name'] = fullName;
+    if (age != null) patch['age'] = age;
+    if (email != null) patch['email'] = email;
+    if (phone != null) patch['phone'] = phone;
 
     final body = await _api.patch('/api/v1/users/$id', body: patch);
     return User.fromJson(body as Map<String, dynamic>);
   }
 
-  Future<void> delete(int id) async {
+  Future<User> updateMe({
+    String? fullName,
+    int? age,
+    String? email,
+    String? phone,
+    String? password,
+  }) async {
+    final patch = <String, dynamic>{};
+    if (fullName != null) patch['full_name'] = fullName;
+    if (age != null) patch['age'] = age;
+    if (email != null) patch['email'] = email;
+    if (phone != null) patch['phone'] = phone;
+    if (password != null && password.isNotEmpty) patch['password'] = password;
+
+    final body = await _api.patch('/api/v1/users/me', body: patch);
+    return User.fromJson(body as Map<String, dynamic>);
+  }
+
+  Future<void> delete(String id) async {
     await _api.delete('/api/v1/users/$id');
   }
 
-  Future<User> toggleActive(int id) async {
+  Future<User> toggleActive(String id) async {
     final body = await _api.patch('/api/v1/users/$id/toggle-active');
     return User.fromJson(body as Map<String, dynamic>);
   }
 
-  Future<User> resetPassword(int id) async {
+  Future<User> resetPassword(String id) async {
     final body = await _api.post('/api/v1/users/$id/reset-password');
     return User.fromJson(body as Map<String, dynamic>);
+  }
+
+  Future<void> changePassword({
+    required String oldPassword,
+    required String newPassword,
+  }) async {
+    await _api.post('/api/v1/users/me/change-password', body: {
+      'old_password': oldPassword,
+      'new_password': newPassword,
+    });
   }
 }

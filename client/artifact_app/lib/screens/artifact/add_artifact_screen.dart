@@ -20,6 +20,7 @@ class _AddArtifactScreenState extends State<AddArtifactScreen> {
   final _descriptionController = TextEditingController();
   final _dateController = TextEditingController();
   final _timeController = TextEditingController();
+  final _intervalController = TextEditingController(text: '0'); // Mặc định 0 (không nhắc lại)
 
   ArtifactStatus _status = ArtifactStatus.good;
   DateTime? _selectedDate;
@@ -33,6 +34,7 @@ class _AddArtifactScreenState extends State<AddArtifactScreen> {
     _descriptionController.dispose();
     _dateController.dispose();
     _timeController.dispose();
+    _intervalController.dispose();
     super.dispose();
   }
 
@@ -81,6 +83,8 @@ class _AddArtifactScreenState extends State<AddArtifactScreen> {
           location: _locationController.text.trim(),
           scheduledDate: _selectedDate,
           scheduledTime: timeStr,
+          // Truyền thêm số ngày nhắc lại
+          inspectionIntervalDays: int.tryParse(_intervalController.text) ?? 0,
         );
         
     if (!mounted) return;
@@ -133,6 +137,16 @@ class _AddArtifactScreenState extends State<AddArtifactScreen> {
                   ),
                 ),
                 const SizedBox(height: 14),
+                TextFormField(
+                  controller: _intervalController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Recurring interval (Days)',
+                    prefixIcon: Icon(Icons.repeat),
+                    helperText: '0 = One-time only, >0 = Repeat every X days',
+                  ),
+                ),
+                const SizedBox(height: 14),
                 DropdownButtonFormField<ArtifactStatus>(
                   value: _status,
                   items: const [
@@ -162,7 +176,7 @@ class _AddArtifactScreenState extends State<AddArtifactScreen> {
                         readOnly: true,
                         onTap: _selectDate,
                         decoration: const InputDecoration(
-                          labelText: 'Schedule Date',
+                          labelText: 'Start Date',
                           prefixIcon: Icon(Icons.calendar_today),
                           hintText: 'Optional',
                         ),
@@ -175,7 +189,7 @@ class _AddArtifactScreenState extends State<AddArtifactScreen> {
                         readOnly: true,
                         onTap: _selectTime,
                         decoration: const InputDecoration(
-                          labelText: 'Schedule Time',
+                          labelText: 'Time',
                           prefixIcon: Icon(Icons.access_time),
                         ),
                       ),

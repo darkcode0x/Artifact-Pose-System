@@ -13,11 +13,11 @@ InspectionType = Literal["scheduled", "sudden"]
 class InspectionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
-    artifact_id: int
-    schedule_id: int | None = None
+    id: str # Changed to str for 6-digit ID
+    artifact_id: str # Changed to str
+    schedule_id: str | None = None # Changed to str
     previous_image_path: str | None = None
-    current_image_path: str | None = None # Cho phép null để tránh lỗi validation khi đang xử lý
+    current_image_path: str | None = None
     heatmap_path: str | None = None
     damage_score: int = Field(ge=0, le=100)
     ssim_score: str | None = None

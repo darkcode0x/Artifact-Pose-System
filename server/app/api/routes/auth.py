@@ -38,7 +38,7 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)) -> UserRead:
     user = User(
         username=data.username,
         password_hash=hash_password(data.password),
-        role=UserRole.OPERATOR,
+        role=UserRole.operator,
     )
     db.add(user)
     try:

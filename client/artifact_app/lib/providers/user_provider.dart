@@ -9,11 +9,13 @@ class UserProvider with ChangeNotifier {
 
   UserProvider(this._service);
 
-  List<User> _users = const [];
+  List<User> _users = [];
   bool _loading = false;
   String? _error;
 
-  List<User> get users => _users;
+  List<User> get users => List.unmodifiable(_users);
+  int get userCount => _users.length;
+  bool get loading => _loading;
   bool get isLoading => _loading;
   String? get error => _error;
 
@@ -25,8 +27,10 @@ class UserProvider with ChangeNotifier {
       _users = await _service.list();
     } on ApiException catch (e) {
       _error = e.message;
-    } catch (_) {
+      debugPrint('UserProvider ApiException: ${e.message}');
+    } catch (e) {
       _error = 'Could not load users';
+      debugPrint('UserProvider Error: $e');
     } finally {
       _loading = false;
       notifyListeners();
@@ -37,52 +41,84 @@ class UserProvider with ChangeNotifier {
     required String username,
     required String password,
     required UserRole role,
+    String? fullName,
+    int? age,
+    String? email,
+    String? phone,
   }) async {
     try {
       final created = await _service.create(
         username: username,
         password: password,
         role: role,
+        fullName: fullName,
+        age: age,
+        email: email,
+        phone: phone,
       );
-      _users = [..._users, created];
+      _users = [created, ..._users];
       notifyListeners();
       return created;
-    } on ApiException {
+    } on ApiException catch (e) {
+      _error = e.message;
+      notifyListeners();
       rethrow;
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      return null;
     }
   }
 
-  Future<bool> remove(int id) async {
+  Future<bool> remove(String id) async {
     try {
       await _service.delete(id);
       _users = _users.where((u) => u.userId != id).toList();
       notifyListeners();
       return true;
-    } on ApiException {
+    } on ApiException catch (e) {
+      _error = e.message;
+      notifyListeners();
       rethrow;
     }
   }
 
-  Future<User?> updateRole(int id, UserRole role) async {
+  Future<User?> update(
+    String id, {
+    UserRole? role,
+    String? fullName,
+    int? age,
+    String? email,
+    String? phone,
+  }) async {
     try {
-      final updated = await _service.update(id, role: role);
-      _users =
-          _users.map((u) => u.userId == id ? updated : u).toList();
+      final updated = await _service.update(
+        id,
+        role: role,
+        fullName: fullName,
+        age: age,
+        email: email,
+        phone: phone,
+      );
+      _users = _users.map((u) => u.userId == id ? updated : u).toList();
       notifyListeners();
       return updated;
-    } on ApiException {
+    } on ApiException catch (e) {
+      _error = e.message;
+      notifyListeners();
       rethrow;
     }
   }
 
-  Future<User?> toggleActive(int id) async {
+  Future<User?> toggleActive(String id) async {
     try {
       final updated = await _service.toggleActive(id);
-      _users =
-          _users.map((u) => u.userId == id ? updated : u).toList();
+      _users = _users.map((u) => u.userId == id ? updated : u).toList();
       notifyListeners();
       return updated;
-    } on ApiException {
+    } on ApiException catch (e) {
+      _error = e.message;
+      notifyListeners();
       rethrow;
     }
   }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/iot_device.dart';
+import '../../providers/auth_provider.dart';
 import '../../services/api_client.dart';
 import '../../services/device_service.dart';
 import '../../theme.dart';
@@ -17,22 +18,96 @@ class DeviceListScreen extends StatefulWidget {
 
 class _DeviceListScreenState extends State<DeviceListScreen> {
   late DeviceService _service;
-  late Future<List<IotDevice>> _future;
+  late Future<List<IotDevice>> _devicesFuture;
 
   @override
   void initState() {
     super.initState();
     _service = DeviceService(context.read<ApiClient>());
-    _future = _service.list();
+    _loadDevices();
+  }
+
+  void _loadDevices() {
+    setState(() {
+      _devicesFuture = _service.list();
+    });
   }
 
   Future<void> _refresh() async {
-    setState(() => _future = _service.list());
-    await _future;
+    _loadDevices();
+    await _devicesFuture;
+  }
+
+  Future<void> _addDevice() async {
+    final codeController = TextEditingController();
+    final descController = TextEditingController();
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add New Device'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: codeController,
+              decoration: const InputDecoration(
+                labelText: 'Device Code (Unique)',
+                hintText: 'e.g. pi-cam-01',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: descController,
+              decoration: const InputDecoration(labelText: 'Description'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Add')),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+    final code = codeController.text.trim();
+    if (code.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Device code is required')),
+        );
+      }
+      return;
+    }
+    try {
+      await _service.create(code, description: descController.text.trim());
+      _refresh();
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    // Both Admin and Operator can add devices.
+    final canAdd = auth.isAdmin || auth.role == 'operator';
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('IoT Devices'),
@@ -49,7 +124,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
         child: ResponsiveBody(
           padding: const EdgeInsets.all(16),
           child: FutureBuilder<List<IotDevice>>(
-            future: _future,
+            future: _devicesFuture,
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());
@@ -67,9 +142,9 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                     SizedBox(height: 80),
                     EmptyStateView(
                       icon: Icons.devices_other_outlined,
-                      title: 'No devices registered yet',
+                      title: 'No devices registered',
                       subtitle:
-                          'Devices register themselves via POST /devices/get_device_id',
+                          'Tap "Add Device" to register a new IoT device.',
                     ),
                   ],
                 );
@@ -79,69 +154,62 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                 separatorBuilder: (_, __) => const SizedBox(height: 12),
                 itemBuilder: (context, i) => _DeviceCard(
                   device: devices[i],
-                  service: _service,
-                  onTap: () => _openDetail(devices[i]),
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => DeviceDetailScreen(
+                          device: devices[i],
+                          service: _service,
+                        ),
+                      ),
+                    );
+                    _refresh();
+                  },
                 ),
               );
             },
           ),
         ),
       ),
+      floatingActionButton: canAdd
+          ? FloatingActionButton.extended(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              onPressed: _addDevice,
+              label: const Text('Add Device'),
+              icon: const Icon(Icons.add),
+            )
+          : null,
     );
-  }
-
-  Future<void> _openDetail(IotDevice device) async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) =>
-            DeviceDetailScreen(deviceId: device.deviceId, service: _service),
-      ),
-    );
-    _refresh();
   }
 }
 
 class _DeviceCard extends StatelessWidget {
   final IotDevice device;
-  final DeviceService service;
   final VoidCallback onTap;
 
-  const _DeviceCard({
-    required this.device,
-    required this.service,
-    required this.onTap,
-  });
+  const _DeviceCard({required this.device, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final online = device.isOnline;
     return Card(
       child: ListTile(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         leading: CircleAvatar(
-          backgroundColor:
-              online ? AppColors.statusGood : AppColors.surfaceMuted,
+          backgroundColor: device.isOnline
+              ? Colors.green.withOpacity(0.1)
+              : Colors.grey.withOpacity(0.1),
           child: Icon(
-            Icons.developer_board,
-            color: online ? Colors.white : AppColors.textMuted,
+            Icons.router,
+            color: device.isOnline ? Colors.green : Colors.grey,
           ),
         ),
         title: Text(
-          device.deviceId,
+          device.deviceCode,
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        subtitle: Text(
-          device.machineHash.isEmpty
-              ? (online ? 'Online' : 'No recent activity')
-              : 'machine: ${device.machineHash}',
-        ),
-        trailing: Icon(
-          Icons.circle,
-          size: 12,
-          color: online ? AppColors.statusGood : AppColors.textFaint,
-        ),
+        subtitle: Text('Status: ${device.status.name.toUpperCase()}'),
+        trailing: const Icon(Icons.chevron_right),
         onTap: onTap,
       ),
     );

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import List
 
-from app.api.dependencies import get_container
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
+
+from app.api.dependencies import get_container, get_current_user, require_admin
+from app.core.database import get_db
+from app.models.iot_device import IotDevice, DeviceStatus
+from app.models.user import User
 from app.schemas.devices import (
     DeviceAcksResponse,
     DeviceIdRequest,
     DeviceIdResponse,
-    DeviceListResponse,
     DeviceStatusResponse,
     DeviceSummary,
     MoveCommand,
@@ -16,26 +21,95 @@ from app.schemas.devices import (
 )
 from app.services.state import AppContainer
 
-router = APIRouter()
+router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 
 
-@router.get("/devices", response_model=DeviceListResponse)
+# --------- DB-backed CRUD ---------
+
+@router.get("", response_model=List[DeviceSummary])
 def list_devices(
-    container: AppContainer = Depends(get_container),
-) -> DeviceListResponse:
-    entries = container.device_registry.list_all()
-    summaries = [
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[DeviceSummary]:
+    devices = db.query(IotDevice).order_by(IotDevice.created_at.desc()).all()
+    return [
         DeviceSummary(
-            device_id=entry["device_id"],
-            machine_hash=entry["machine_hash"],
-            status=container.command_service.get_status(entry["device_id"]),
+            device_id=d.device_id,
+            machine_hash=d.device_code,
+            status={
+                "db_status": d.status.value,
+                "description": d.description or "",
+                "last_active_at": d.last_active_at.isoformat() if d.last_active_at else None,
+            },
         )
-        for entry in entries
+        for d in devices
     ]
-    return DeviceListResponse(ok=True, count=len(summaries), devices=summaries)
 
 
-@router.post("/devices/get_device_id", response_model=DeviceIdResponse)
+@router.post("", status_code=status.HTTP_201_CREATED)
+def create_device(
+    device_code: str,
+    description: str = "",
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    existing = db.query(IotDevice).filter(IotDevice.device_code == device_code).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Device code already exists")
+
+    new_device = IotDevice(
+        device_code=device_code,
+        description=description,
+        status=DeviceStatus.offline,
+    )
+    db.add(new_device)
+    db.commit()
+    db.refresh(new_device)
+    return {"ok": True, "device_id": new_device.device_id, "message": "Device created successfully"}
+
+
+@router.patch("/{device_id}")
+def update_device(
+    device_id: str,
+    description: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    device = db.query(IotDevice).filter(IotDevice.device_id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    if description is not None:
+        device.description = description
+    if status is not None:
+        try:
+            device.status = DeviceStatus(status.lower())
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+
+    db.commit()
+    return {"ok": True, "message": "Device updated successfully"}
+
+
+@router.delete("/{device_id}", status_code=204)
+def delete_device(
+    device_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> None:
+    device = db.query(IotDevice).filter(IotDevice.device_id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    db.delete(device)
+    db.commit()
+
+
+# --------- IoT operational endpoints (used by Raspberry Pi clients) ---------
+# These endpoints don't require auth so devices on the local network can register
+# and poll commands. If you want to lock them down, wire in get_current_user.
+
+@router.post("/get_device_id", response_model=DeviceIdResponse)
 def get_device_id(
     req: DeviceIdRequest,
     container: AppContainer = Depends(get_container),
@@ -55,7 +129,7 @@ def get_device_id(
     )
 
 
-@router.post("/devices/{device_id}/queue_move", response_model=QueueMoveResponse)
+@router.post("/{device_id}/queue_move", response_model=QueueMoveResponse)
 def queue_move(
     device_id: str,
     cmd: MoveCommand,
@@ -67,7 +141,6 @@ def queue_move(
 
     published, publish_result = container.mqtt_bridge.publish_command(device_id, payload)
     queued = 0
-
     if not published:
         queued = container.command_service.queue_command(device_id, payload)
 
@@ -82,7 +155,7 @@ def queue_move(
     )
 
 
-@router.post("/devices/{device_id}/move", response_model=MoveCommand)
+@router.post("/{device_id}/move", response_model=MoveCommand)
 def poll_move_command(
     device_id: str,
     req: MoveCommandRequest | None = None,
@@ -90,12 +163,11 @@ def poll_move_command(
 ) -> MoveCommand:
     if req is not None and req.device_id != device_id:
         raise HTTPException(status_code=400, detail="device_id mismatch")
-
     payload = container.command_service.pop_next_command(device_id)
     return MoveCommand(**payload)
 
 
-@router.get("/devices/{device_id}/status", response_model=DeviceStatusResponse)
+@router.get("/{device_id}/status", response_model=DeviceStatusResponse)
 def device_status(
     device_id: str,
     container: AppContainer = Depends(get_container),
@@ -107,7 +179,7 @@ def device_status(
     )
 
 
-@router.get("/devices/{device_id}/acks", response_model=DeviceAcksResponse)
+@router.get("/{device_id}/acks", response_model=DeviceAcksResponse)
 def device_acks(
     device_id: str,
     limit: int = Query(default=20, ge=1, le=200),
