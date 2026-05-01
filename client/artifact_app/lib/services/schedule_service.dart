@@ -23,7 +23,7 @@ class ScheduleService {
   }
 
   Future<Schedule> create({
-    required int artifactId,
+    required String artifactId, // Đảm bảo String
     required DateTime scheduledDate,
     String scheduledTime = '09:00',
     String operatorUsername = '',
@@ -39,7 +39,7 @@ class ScheduleService {
     return Schedule.fromJson(body as Map<String, dynamic>);
   }
 
-  Future<Schedule> markComplete(int id, bool completed) async {
+  Future<Schedule> markComplete(String id, bool completed) async { // Đảm bảo String
     final body = await _api.patch(
       '/api/v1/schedules/$id',
       body: {'completed': completed},
@@ -47,7 +47,7 @@ class ScheduleService {
     return Schedule.fromJson(body as Map<String, dynamic>);
   }
 
-  Future<void> delete(int id) async {
+  Future<void> delete(String id) async { // Đảm bảo String
     await _api.delete('/api/v1/schedules/$id');
   }
 }

@@ -1,9 +1,8 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 
 class ApiConfig {
-  // IP của máy tính chạy Server trong mạng nội bộ (Dành cho điện thoại thật)
-  // Theo log gần nhất của bạn là 192.168.1.151 (hoặc 192.168.1.149 tùy thời điểm)
-  static const String _pcIp = '192.168.1.151';
+  // IP CỦA MÁY TÍNH CHẠY SERVER (Đã cập nhật theo yêu cầu: 192.168.1.169)
+  static const String _pcIp = '192.168.1.169'; 
 
   static const String _defaultUrl = kIsWeb
       ? 'http://127.0.0.1:8000'

@@ -1,24 +1,18 @@
 from __future__ import annotations
-
 from typing import Any
-
 from pydantic import BaseModel, Field
-
 
 class DeviceIdRequest(BaseModel):
     machine_hash: str = Field(min_length=1)
     preferred_device_id: str | None = None
-
 
 class DeviceIdResponse(BaseModel):
     ok: bool
     device_id: str
     machine_hash: str
 
-
 class MoveCommandRequest(BaseModel):
     device_id: str
-
 
 class MoveCommand(BaseModel):
     action: str
@@ -49,7 +43,6 @@ class MoveCommand(BaseModel):
     capture_after_move: dict[str, Any] | bool | None = None
     workflow: dict[str, Any] | None = None
 
-
 class QueueMoveResponse(BaseModel):
     ok: bool
     mode: str
@@ -59,15 +52,23 @@ class QueueMoveResponse(BaseModel):
     task_id: str
     queued: int
 
-
 class DeviceStatusResponse(BaseModel):
     ok: bool
     device_id: str
     status: dict[str, Any] | None = None
-
 
 class DeviceAcksResponse(BaseModel):
     ok: bool
     device_id: str
     count: int
     acks: list[dict[str, Any]]
+
+class DeviceSummary(BaseModel):
+    device_id: str
+    machine_hash: str
+    status: dict[str, Any] | None = None
+
+class DeviceListResponse(BaseModel):
+    ok: bool
+    count: int
+    devices: list[DeviceSummary]

@@ -3,20 +3,20 @@ enum DeviceStatus {
   offline;
 
   static DeviceStatus fromWire(String? value) {
-    if (value == 'online') return DeviceStatus.online;
+    if (value?.toLowerCase() == 'online') return DeviceStatus.online;
     return DeviceStatus.offline;
   }
 }
 
 class IotDevice {
-  final int deviceId;
+  final String deviceId; // VARCHAR(6) from PostgreSQL
   final String deviceCode;
   final String? description;
   final DeviceStatus status;
   final DateTime createdAt;
   final DateTime? lastActiveAt;
 
-  IotDevice({
+  const IotDevice({
     required this.deviceId,
     required this.deviceCode,
     this.description,
@@ -25,16 +25,18 @@ class IotDevice {
     this.lastActiveAt,
   });
 
+  bool get isOnline => status == DeviceStatus.online;
+
   factory IotDevice.fromJson(Map<String, dynamic> json) {
     return IotDevice(
-      deviceId: json['device_id'] as int,
-      deviceCode: json['device_code'] as String,
+      deviceId: json['device_id']?.toString() ?? '',
+      deviceCode: (json['device_code'] ?? json['machine_hash'] ?? '') as String,
       description: json['description'] as String?,
-      status: DeviceStatus.fromWire(json['status'] as String?),
-      createdAt: DateTime.parse(json['created_at'] as String),
-      lastActiveAt: json['last_active_at'] != null 
-          ? DateTime.parse(json['last_active_at'] as String)
-          : null,
+      status: DeviceStatus.fromWire(json['status'] is String 
+          ? json['status'] as String 
+          : json['status']?['db_status'] as String?),
+      createdAt: DateTime.tryParse(json['created_at']?.toString() ?? '') ?? DateTime.now(),
+      lastActiveAt: DateTime.tryParse(json['last_active_at']?.toString() ?? ''),
     );
   }
 }

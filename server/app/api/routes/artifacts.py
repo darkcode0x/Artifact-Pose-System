@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -21,13 +22,17 @@ router = APIRouter(prefix="/api/v1/artifacts", tags=["artifacts"])
 def _to_url(path_str: str | None) -> str | None:
     if not path_str:
         return None
+    if path_str.startswith("/uploads/"):
+        return path_str
     try:
+        if "/" not in path_str and "\\" not in path_str:
+            return f"/uploads/{path_str}"
         uploads_dir = get_settings().uploads_dir.resolve()
         full = Path(path_str).resolve()
         rel = full.relative_to(uploads_dir).as_posix()
         return f"/uploads/{rel}"
     except (ValueError, OSError):
-        return path_str
+        return f"/uploads/{path_str}" if not path_str.startswith("http") else path_str
 
 
 def _serialize(artifact: Artifact) -> ArtifactRead:
@@ -38,6 +43,7 @@ def _serialize(artifact: Artifact) -> ArtifactRead:
         description=artifact.description or "",
         location=artifact.location or "",
         status=artifact.status,
+        inspection_interval_days=artifact.inspection_interval_days,
         has_image=artifact.baseline_image_id is not None,
         reference_image_path=_to_url(ref_path),
         created_at=artifact.created_at,
@@ -48,7 +54,6 @@ def _serialize(artifact: Artifact) -> ArtifactRead:
 def _serialize_comparison(record: ImageComparison) -> InspectionRead:
     prev_path = record.previous_image.image_path if record.previous_image else None
     curr_path = record.current_image.image_path if record.current_image else None
-    
     return InspectionRead(
         id=record.comparison_id,
         artifact_id=record.artifact_id,
@@ -78,25 +83,6 @@ def list_artifacts(
     return [_serialize(a) for a in query.all()]
 
 
-@router.get("/alerts", response_model=list[ArtifactRead])
-def list_alerts(db: Session = Depends(get_db)) -> list[ArtifactRead]:
-    artifacts = (
-        db.query(Artifact)
-        .filter(Artifact.status.in_(["warning", "damaged"]))
-        .order_by(Artifact.updated_at.desc())
-        .all()
-    )
-    return [_serialize(a) for a in artifacts]
-
-
-@router.get("/{artifact_id}", response_model=ArtifactRead)
-def get_artifact(artifact_id: int, db: Session = Depends(get_db)) -> ArtifactRead:
-    artifact = db.query(Artifact).filter(Artifact.artifact_id == artifact_id).first()
-    if artifact is None:
-        raise HTTPException(status_code=404, detail="Artifact not found")
-    return _serialize(artifact)
-
-
 @router.post("", response_model=ArtifactRead, status_code=201)
 def create_artifact(
     payload: ArtifactCreate,
@@ -104,16 +90,14 @@ def create_artifact(
 ) -> ArtifactRead:
     existing = db.query(Artifact).filter(Artifact.name == payload.name).first()
     if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Artifact with name '{payload.name}' already exists."
-        )
+        raise HTTPException(status_code=400, detail=f"Artifact '{payload.name}' already exists.")
 
     artifact = Artifact(
         name=payload.name,
         description=payload.description,
         location=payload.location,
         status=payload.status,
+        inspection_interval_days=payload.inspection_interval_days,
     )
     db.add(artifact)
     db.flush()
@@ -123,7 +107,7 @@ def create_artifact(
             artifact_id=artifact.artifact_id,
             scheduled_date=payload.scheduled_date,
             scheduled_time=payload.scheduled_time or "09:00",
-            notes="Initial inspection schedule created with artifact."
+            notes="Initial schedule."
         )
         db.add(schedule)
 
@@ -132,9 +116,64 @@ def create_artifact(
     return _serialize(artifact)
 
 
+@router.post("/{artifact_id}/inspect", response_model=InspectionRead)
+async def inspect_artifact(
+    artifact_id: str,
+    file: UploadFile = File(...),
+    description: str = Form(default=""),
+    created_by: str = Form(default=""),
+    inspection_type: str = Form(default="sudden"),
+    schedule_id: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+    container: AppContainer = Depends(get_container),
+) -> InspectionRead:
+    artifact = db.query(Artifact).filter(Artifact.artifact_id == artifact_id).first()
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    try:
+        image_bytes = await file.read()
+        itype = InspectionType.scheduled if inspection_type == "scheduled" else InspectionType.sudden
+
+        record = container.inspection_service.run_artifact_inspection(
+            db=db,
+            artifact=artifact,
+            image_bytes=image_bytes,
+            original_filename=file.filename or "upload.jpg",
+            description=description,
+            inspection_type=itype,
+            schedule_id=schedule_id,
+        )
+
+        # LOGIC MỚI: Tự động tạo lịch tiếp theo nếu có chu kỳ nhắc lại
+        if artifact.inspection_interval_days > 0:
+            next_date = datetime.now(timezone.utc) + timedelta(days=artifact.inspection_interval_days)
+            new_schedule = Schedule(
+                artifact_id=artifact.artifact_id,
+                scheduled_date=next_date,
+                scheduled_time="09:00",
+                notes=f"Tự động tạo: Chu kỳ {artifact.inspection_interval_days} ngày."
+            )
+            db.add(new_schedule)
+            db.commit()
+
+        return _serialize_comparison(record)
+    except Exception as e:
+        logger.error(f"Inspection failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+
+@router.get("/{artifact_id}", response_model=ArtifactRead)
+def get_artifact(artifact_id: str, db: Session = Depends(get_db)) -> ArtifactRead:
+    artifact = db.query(Artifact).filter(Artifact.artifact_id == artifact_id).first()
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return _serialize(artifact)
+
+
 @router.patch("/{artifact_id}", response_model=ArtifactRead)
 def update_artifact(
-    artifact_id: int,
+    artifact_id: str,
     payload: ArtifactUpdate,
     db: Session = Depends(get_db),
 ) -> ArtifactRead:
@@ -153,7 +192,7 @@ def update_artifact(
 
 
 @router.delete("/{artifact_id}", status_code=204)
-def delete_artifact(artifact_id: int, db: Session = Depends(get_db)) -> None:
+def delete_artifact(artifact_id: str, db: Session = Depends(get_db)) -> None:
     artifact = db.query(Artifact).filter(Artifact.artifact_id == artifact_id).first()
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
@@ -188,66 +227,19 @@ async def upload_reference_image(
 
 @router.get("/{artifact_id}/inspections", response_model=InspectionListResponse)
 def list_artifact_inspections(
-    artifact_id: int,
+    artifact_id: str,
     limit: int = 50,
     db: Session = Depends(get_db),
 ) -> InspectionListResponse:
-    if db.query(Artifact).filter(Artifact.artifact_id == artifact_id).first() is None:
-        raise HTTPException(status_code=404, detail="Artifact not found")
-
     items = (
         db.query(ImageComparison)
         .filter(ImageComparison.artifact_id == artifact_id)
         .order_by(ImageComparison.created_at.desc())
-        .limit(max(1, min(limit, 200)))
+        .limit(limit)
         .all()
     )
-    total = (
-        db.query(ImageComparison)
-        .filter(ImageComparison.artifact_id == artifact_id)
-        .count()
-    )
+    total = db.query(ImageComparison).filter(ImageComparison.artifact_id == artifact_id).count()
     return InspectionListResponse(
         items=[_serialize_comparison(item) for item in items],
         total=total,
     )
-
-
-@router.post("/{artifact_id}/inspect", response_model=InspectionRead)
-async def inspect_artifact(
-    artifact_id: int,
-    file: UploadFile = File(...),
-    description: str = Form(default=""),
-    created_by: str = Form(default=""),
-    inspection_type: str = Form(default="sudden"),
-    schedule_id: int | None = Form(default=None),
-    db: Session = Depends(get_db),
-    container: AppContainer = Depends(get_container),
-) -> InspectionRead:
-    artifact = db.query(Artifact).filter(Artifact.artifact_id == artifact_id).first()
-    if artifact is None:
-        raise HTTPException(status_code=404, detail="Artifact not found")
-
-    try:
-        image_bytes = await file.read()
-        if not image_bytes:
-            raise HTTPException(status_code=400, detail="Empty image file")
-
-        itype = InspectionType.SCHEDULED if inspection_type == "scheduled" else InspectionType.SUDDEN
-
-        record = container.inspection_service.run_artifact_inspection(
-            db=db,
-            artifact=artifact,
-            image_bytes=image_bytes,
-            original_filename=file.filename or "upload.jpg",
-            description=description,
-            inspection_type=itype,
-            schedule_id=schedule_id,
-        )
-        return _serialize_comparison(record)
-    except Exception as e:
-        logger.error(f"Inspection failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Analysis failed: {str(e)}"
-        )

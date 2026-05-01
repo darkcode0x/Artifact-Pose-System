@@ -51,7 +51,7 @@ class ScheduleProvider with ChangeNotifier {
   }
 
   Future<Schedule?> create({
-    required int artifactId,
+    required String artifactId, // Changed to String
     required DateTime date,
     required String time,
     required String operatorUsername,
@@ -76,7 +76,7 @@ class ScheduleProvider with ChangeNotifier {
     }
   }
 
-  Future<void> markComplete(int id, bool completed) async {
+  Future<void> markComplete(String id, bool completed) async { // Changed to String
     try {
       final updated = await _service.markComplete(id, completed);
       _schedules =

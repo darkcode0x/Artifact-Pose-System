@@ -13,9 +13,9 @@ enum InspectionType {
 }
 
 class Inspection {
-  final int id;
-  final int artifactId;
-  final int? scheduleId;
+  final String id; // VARCHAR(6)
+  final String artifactId; // VARCHAR(6)
+  final String? scheduleId; // VARCHAR(6)
   final String? previousImagePath;
   final String currentImagePath;
   final String? heatmapPath;
@@ -45,9 +45,9 @@ class Inspection {
 
   factory Inspection.fromJson(Map<String, dynamic> json) {
     return Inspection(
-      id: json['id'] as int,
-      artifactId: json['artifact_id'] as int,
-      scheduleId: json['schedule_id'] as int?,
+      id: json['id']?.toString() ?? '',
+      artifactId: json['artifact_id']?.toString() ?? '',
+      scheduleId: json['schedule_id']?.toString(),
       previousImagePath: json['previous_image_path'] as String?,
       currentImagePath: json['current_image_path'] as String? ?? '',
       heatmapPath: json['heatmap_path'] as String?,

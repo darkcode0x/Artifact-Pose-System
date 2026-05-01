@@ -3,10 +3,13 @@ import 'package:provider/provider.dart';
 
 import '../../providers/artifact_provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/user_provider.dart';
 import '../../theme.dart';
 import '../../widgets/responsive_scaffold.dart';
 import '../alerts/alert_screen.dart';
 import '../artifact/artifact_list_screen.dart';
+import '../devices/device_list_screen.dart';
+import '../profile/profile_screen.dart';
 import '../schedule/schedule_screen.dart';
 import 'user_list_screen.dart';
 
@@ -23,23 +26,32 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ArtifactProvider>().refresh();
+      context.read<UserProvider>().refresh();
+      context.read<AuthProvider>().fetchFullProfile();
     });
   }
 
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<ArtifactProvider>();
+    final userProvider = context.watch<UserProvider>();
+    final auth = context.watch<AuthProvider>();
+    final displayName = auth.currentUser?.fullName ?? auth.username ?? 'Admin';
 
     return Scaffold(
       body: SafeArea(
-        bottom: false,
         child: RefreshIndicator(
-          onRefresh: () => context.read<ArtifactProvider>().refresh(),
+          onRefresh: () async {
+            await context.read<ArtifactProvider>().refresh();
+            await context.read<UserProvider>().refresh();
+            await context.read<AuthProvider>().fetchFullProfile();
+          },
           child: ListView(
             padding: EdgeInsets.zero,
             children: [
               _Header(
-                onLogout: () => context.read<AuthProvider>().logout(),
+                title: 'Welcome, $displayName',
+                onLogout: () => auth.logout(),
               ),
               const SizedBox(height: 16),
               ResponsiveBody(
@@ -56,7 +68,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                           children: [
                             _Stat(value: '${provider.artifacts.length}', label: 'Artifacts'),
                             _Stat(value: '${provider.alerts.length}', label: 'Alerts'),
-                            const _Stat(value: '—', label: 'Users'),
+                            _Stat(value: '${userProvider.userCount}', label: 'Users'),
                           ],
                         ),
                       ),
@@ -101,6 +113,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                               ),
                             ),
                             _Tile(
+                              icon: Icons.router_outlined,
+                              title: 'IoT Devices',
+                              onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const DeviceListScreen(),
+                                ),
+                              ),
+                            ),
+                            _Tile(
                               icon: Icons.calendar_month,
                               title: 'Schedules',
                               onTap: () => Navigator.push(
@@ -121,6 +143,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                                 ),
                               ),
                             ),
+                            _Tile(
+                              icon: Icons.person_outline,
+                              title: 'My Profile',
+                              onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const ProfileScreen(),
+                                ),
+                              ),
+                            ),
                           ],
                         );
                       },
@@ -138,8 +170,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 }
 
 class _Header extends StatelessWidget {
+  final String title;
   final VoidCallback onLogout;
-  const _Header({required this.onLogout});
+  const _Header({required this.title, required this.onLogout});
 
   @override
   Widget build(BuildContext context) {
@@ -157,22 +190,30 @@ class _Header extends StatelessWidget {
         padding: EdgeInsets.zero,
         child: Row(
           children: [
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Museum Monitoring',
+                  const Text('Museum Monitoring',
                       style: TextStyle(color: Colors.white70, fontSize: 13)),
-                  SizedBox(height: 4),
+                  const SizedBox(height: 4),
                   Text(
-                    'Admin Dashboard',
-                    style: TextStyle(
+                    title,
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 22,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                 ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Profile',
+              icon: const Icon(Icons.account_circle, color: Colors.white, size: 28),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ProfileScreen()),
               ),
             ),
             IconButton(
@@ -241,7 +282,8 @@ class _Tile extends StatelessWidget {
                   Icon(icon, size: 32, color: AppColors.primary),
                   const SizedBox(height: 10),
                   Text(title,
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                      textAlign: TextAlign.center),
                 ],
               ),
             ),

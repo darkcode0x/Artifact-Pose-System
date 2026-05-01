@@ -58,7 +58,7 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
       try {
         final api = context.read<ApiClient>();
         await api.post('/api/v1/users/${_currentUser.userId}/reset-password');
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Password reset to 111111 successful')));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Password reset successful')));
       } catch (e) {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
       } finally {
@@ -90,10 +90,16 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
             _infoTile(Icons.person_outline, 'Username', _currentUser.username),
             _infoTile(Icons.badge_outlined, 'Role', roleName),
             _infoTile(Icons.toggle_on_outlined, 'Status', _currentUser.isActive ? 'Active' : 'Inactive', color: _currentUser.isActive ? Colors.green : Colors.grey),
+            
+            // New profile fields
+            _infoTile(Icons.badge_outlined, 'Full Name', _currentUser.fullName ?? '—'),
+            _infoTile(Icons.email_outlined, 'Email', _currentUser.email ?? '—'),
+            _infoTile(Icons.phone_android_outlined, 'Phone', _currentUser.phone ?? '—'),
+            _infoTile(Icons.cake_outlined, 'Age', _currentUser.age?.toString() ?? '—'),
+            
             _infoTile(Icons.calendar_today_outlined, 'Created At', formatter.format(_currentUser.createdAt)),
             const SizedBox(height: 32),
             
-            // Nút Khóa/Mở khóa
             if (_currentUser.role != UserRole.admin)
               SizedBox(
                 width: double.infinity,
@@ -107,7 +113,6 @@ class _UserDetailScreenState extends State<UserDetailScreen> {
             
             const SizedBox(height: 12),
             
-            // Nút Reset Password
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
