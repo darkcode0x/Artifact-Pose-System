@@ -41,7 +41,7 @@ class APIClient:
 		- O day IoT node dong vai tro client, chu dong goi API de nhan lenh.
 		- Server du kien tra ve JSON chua action, direction, angle/step.
 		"""
-endpoint = f"/api/v1/devices/{self.config.device_id}/move"
+		endpoint = f"/api/v1/devices/{self.config.device_id}/move"
 
 		try:
 			response = requests.post(
