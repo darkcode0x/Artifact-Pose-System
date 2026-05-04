@@ -1,6 +1,6 @@
 class Schedule {
-  final int id;
-  final int artifactId;
+  final String id; // VARCHAR(6)
+  final String artifactId; // VARCHAR(6)
   final String? artifactName;
   final DateTime scheduledDate;
   final String scheduledTime;
@@ -12,7 +12,7 @@ class Schedule {
   Schedule({
     required this.id,
     required this.artifactId,
-    required this.artifactName,
+    this.artifactName,
     required this.scheduledDate,
     required this.scheduledTime,
     required this.operatorUsername,
@@ -23,18 +23,18 @@ class Schedule {
 
   factory Schedule.fromJson(Map<String, dynamic> json) {
     return Schedule(
-      id: json['id'] as int,
-      artifactId: json['artifact_id'] as int,
+      id: json['id']?.toString() ?? '',
+      artifactId: json['artifact_id']?.toString() ?? '',
       artifactName: json['artifact_name'] as String?,
       scheduledDate:
-          DateTime.tryParse(json['scheduled_date'] as String? ?? '') ??
+          DateTime.tryParse(json['scheduled_date']?.toString() ?? '') ??
               DateTime.now(),
-      scheduledTime: json['scheduled_time'] as String? ?? '09:00',
-      operatorUsername: json['operator_username'] as String? ?? '',
-      notes: json['notes'] as String? ?? '',
+      scheduledTime: json['scheduled_time']?.toString() ?? '09:00',
+      operatorUsername: json['operator_username']?.toString() ?? '',
+      notes: json['notes']?.toString() ?? '',
       completed: json['completed'] as bool? ?? false,
       createdAt:
-          DateTime.tryParse(json['created_at'] as String? ?? '') ?? DateTime.now(),
+          DateTime.tryParse(json['created_at']?.toString() ?? '') ?? DateTime.now(),
     );
   }
 }

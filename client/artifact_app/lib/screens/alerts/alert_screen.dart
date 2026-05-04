@@ -97,7 +97,7 @@ class _AlertCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            if (artifact.location.isNotEmpty)
+            if (artifact.location != null && artifact.location!.isNotEmpty)
               Text('Location: ${artifact.location}',
                   style: const TextStyle(color: AppColors.textMuted)),
             const SizedBox(height: 12),

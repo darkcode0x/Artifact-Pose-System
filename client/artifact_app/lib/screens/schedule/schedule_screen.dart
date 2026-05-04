@@ -6,6 +6,7 @@ import '../../models/schedule.dart';
 import '../../providers/schedule_provider.dart';
 import '../../theme.dart';
 import '../../widgets/responsive_scaffold.dart';
+import 'add_schedule_screen.dart';
 import 'schedule_detail_screen.dart';
 
 class ScheduleScreen extends StatefulWidget {
@@ -24,13 +25,48 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     });
   }
 
+  Future<void> _pickDate(BuildContext context, DateTime current) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: current,
+      firstDate: DateTime(now.year - 5),
+      lastDate: DateTime(now.year + 5),
+    );
+    if (picked != null && context.mounted) {
+      context.read<ScheduleProvider>().selectDate(picked);
+    }
+  }
+
+  Future<void> _openCreate(BuildContext context, DateTime initialDate) async {
+    final created = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddScheduleScreen(initialDate: initialDate),
+      ),
+    );
+    if (created == true && context.mounted) {
+      // Make sure the just-created schedule shows up.
+      context.read<ScheduleProvider>().refresh();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<ScheduleProvider>();
     final schedulesToday = provider.forSelectedDate();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Inspection Schedule')),
+      appBar: AppBar(
+        title: const Text('Inspection Schedule'),
+        actions: [
+          IconButton(
+            tooltip: 'Pick date',
+            icon: const Icon(Icons.calendar_today),
+            onPressed: () => _pickDate(context, provider.selectedDate),
+          ),
+        ],
+      ),
       body: RefreshIndicator(
         onRefresh: () => context.read<ScheduleProvider>().refresh(),
         child: ResponsiveBody(
@@ -39,9 +75,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
             children: [
               _DateSelector(
                 selected: provider.selectedDate,
-                onChanged: (d) => context
-                    .read<ScheduleProvider>()
-                    .selectDate(d),
+                onChanged: (d) =>
+                    context.read<ScheduleProvider>().selectDate(d),
               ),
               const SizedBox(height: 16),
               Expanded(
@@ -62,44 +97,124 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           ),
         ),
       ),
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: AppColors.primary,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.add),
+        label: const Text('Add schedule'),
+        onPressed: () => _openCreate(context, provider.selectedDate),
+      ),
     );
   }
 }
 
-class _DateSelector extends StatelessWidget {
+/// Horizontally scrollable strip of days centered on the currently selected
+/// date, so the user can swipe back to past days as well as forward.
+class _DateSelector extends StatefulWidget {
   final DateTime selected;
   final ValueChanged<DateTime> onChanged;
 
   const _DateSelector({required this.selected, required this.onChanged});
 
   @override
-  Widget build(BuildContext context) {
-    final today = DateTime.now();
-    final start = DateTime(today.year, today.month, today.day);
-    final days = List<DateTime>.generate(
-      14,
-      (i) => start.add(Duration(days: i)),
+  State<_DateSelector> createState() => _DateSelectorState();
+}
+
+class _DateSelectorState extends State<_DateSelector> {
+  static const int _daysBefore = 30;
+  static const int _daysAfter = 30;
+  static const double _itemWidth = 64;
+  static const double _itemSpacing = 8;
+
+  late final ScrollController _controller;
+  late DateTime _anchor;
+
+  @override
+  void initState() {
+    super.initState();
+    _anchor = _dayOnly(widget.selected);
+    _controller = ScrollController(
+      initialScrollOffset: _offsetFor(_anchor, widget.selected),
     );
+  }
+
+  @override
+  void didUpdateWidget(covariant _DateSelector oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final newSel = _dayOnly(widget.selected);
+    final oldSel = _dayOnly(oldWidget.selected);
+    if (newSel == oldSel) return;
+
+    final inWindow = !newSel.isBefore(_startDate(_anchor)) &&
+        !newSel.isAfter(_endDate(_anchor));
+    if (!inWindow) {
+      // User jumped far away (e.g. via the calendar picker). Re-anchor the
+      // strip so the new date is centered.
+      setState(() => _anchor = newSel);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_controller.hasClients) return;
+        _controller.jumpTo(_offsetFor(_anchor, newSel));
+      });
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_controller.hasClients) return;
+        _controller.animateTo(
+          _offsetFor(_anchor, newSel),
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOut,
+        );
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+  DateTime _startDate(DateTime anchor) =>
+      anchor.subtract(const Duration(days: _daysBefore));
+  DateTime _endDate(DateTime anchor) =>
+      anchor.add(const Duration(days: _daysAfter));
+
+  double _offsetFor(DateTime anchor, DateTime target) {
+    final start = _startDate(anchor);
+    final index = target.difference(start).inDays;
+    // Try to leave a few items visible before the selected one.
+    final raw = (index - 2) * (_itemWidth + _itemSpacing);
+    return raw < 0 ? 0 : raw;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final start = _startDate(_anchor);
+    final today = _dayOnly(DateTime.now());
+    final total = _daysBefore + _daysAfter + 1;
 
     return SizedBox(
       height: 84,
       child: ListView.separated(
+        controller: _controller,
         scrollDirection: Axis.horizontal,
-        itemCount: days.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemCount: total,
+        separatorBuilder: (_, __) => const SizedBox(width: _itemSpacing),
         itemBuilder: (context, index) {
-          final d = days[index];
-          final isSelected = d.year == selected.year &&
-              d.month == selected.month &&
-              d.day == selected.day;
+          final d = start.add(Duration(days: index));
+          final isSelected = d == _dayOnly(widget.selected);
+          final isToday = d == today;
           return InkWell(
             borderRadius: BorderRadius.circular(14),
-            onTap: () => onChanged(d),
+            onTap: () => widget.onChanged(d),
             child: Container(
-              width: 64,
+              width: _itemWidth,
               decoration: BoxDecoration(
                 color: isSelected ? AppColors.primary : AppColors.surface,
                 borderRadius: BorderRadius.circular(14),
+                border: isToday && !isSelected
+                    ? Border.all(color: AppColors.primary, width: 1.2)
+                    : null,
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,

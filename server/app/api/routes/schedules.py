@@ -49,7 +49,8 @@ def create_schedule(
     payload: ScheduleCreate,
     db: Session = Depends(get_db),
 ) -> ScheduleRead:
-    artifact = db.query(Artifact).filter(Artifact.id == payload.artifact_id).first()
+    # Changed from artifact.id to artifact.artifact_id to match model
+    artifact = db.query(Artifact).filter(Artifact.artifact_id == payload.artifact_id).first()
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
