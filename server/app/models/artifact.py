@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import enum
+import secrets
 from datetime import datetime, timezone
 from typing import List
 
@@ -14,6 +15,10 @@ from app.core.database import Base
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+def _gen_id() -> str:
+    """Generate a unique 6-character hex ID."""
+    return secrets.token_hex(3)
 
 class ImageType(str, enum.Enum):
     baseline = "baseline"
@@ -36,7 +41,7 @@ class InspectionType(str, enum.Enum):
 class Artifact(Base):
     __tablename__ = "artifacts"
 
-    artifact_id = Column(String(6), primary_key=True, index=True)
+    artifact_id = Column(String(6), primary_key=True, index=True, default=_gen_id)
     name = Column(String(255), nullable=False, index=True)
     location = Column(String(255), nullable=True)
     description = Column(Text, nullable=True)
@@ -70,7 +75,7 @@ class Artifact(Base):
 class Image(Base):
     __tablename__ = "images"
 
-    image_id = Column(String(6), primary_key=True, index=True)
+    image_id = Column(String(6), primary_key=True, index=True, default=_gen_id)
     artifact_id = Column(String(6), ForeignKey("artifacts.artifact_id", ondelete="CASCADE"), nullable=False)
     device_id = Column(String(6), ForeignKey("iot_devices.device_id"), nullable=True)
     operator_id = Column(String(6), ForeignKey("users.user_id"), nullable=True)
@@ -86,7 +91,7 @@ class Image(Base):
 class ImageComparison(Base):
     __tablename__ = "image_comparisons"
 
-    comparison_id = Column(String(6), primary_key=True, index=True)
+    comparison_id = Column(String(6), primary_key=True, index=True, default=_gen_id)
     artifact_id = Column(String(6), ForeignKey("artifacts.artifact_id", ondelete="CASCADE"), nullable=False)
     previous_image_id = Column(String(6), ForeignKey("images.image_id"), nullable=False)
     current_image_id = Column(String(6), ForeignKey("images.image_id"), nullable=False)
@@ -111,7 +116,7 @@ class ImageComparison(Base):
 class Alert(Base):
     __tablename__ = "alerts"
 
-    alert_id = Column(String(6), primary_key=True, index=True)
+    alert_id = Column(String(6), primary_key=True, index=True, default=_gen_id)
     artifact_id = Column(String(6), ForeignKey("artifacts.artifact_id", ondelete="CASCADE"), nullable=False)
     comparison_id = Column(String(6), ForeignKey("image_comparisons.comparison_id", ondelete="CASCADE"), nullable=False)
     alert_level = Column(Enum(AlertLevel, name="alert_level"), nullable=False)
@@ -124,7 +129,7 @@ class Alert(Base):
 class Schedule(Base):
     __tablename__ = "schedules"
 
-    id = Column(String(6), primary_key=True, index=True)
+    id = Column(String(6), primary_key=True, index=True, default=_gen_id)
     artifact_id = Column(String(6), ForeignKey("artifacts.artifact_id", ondelete="CASCADE"), nullable=False)
     scheduled_date = Column(DateTime(timezone=True), nullable=False)
     scheduled_time = Column(String(8), nullable=False, default="09:00")

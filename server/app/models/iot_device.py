@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import enum
+import secrets
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Text, DateTime, Enum
@@ -9,6 +10,9 @@ from app.core.database import Base
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
+def _gen_id() -> str:
+    return secrets.token_hex(3)
+
 class DeviceStatus(str, enum.Enum):
     online = "online"
     offline = "offline"
@@ -16,7 +20,7 @@ class DeviceStatus(str, enum.Enum):
 class IotDevice(Base):
     __tablename__ = "iot_devices"
 
-    device_id = Column(String(6), primary_key=True, index=True)
+    device_id = Column(String(6), primary_key=True, index=True, default=_gen_id)
     device_code = Column(String(100), unique=True, index=True, nullable=False)
     description = Column(Text, nullable=True)
     status = Column(Enum(DeviceStatus, name="device_status"), default=DeviceStatus.offline, nullable=False)

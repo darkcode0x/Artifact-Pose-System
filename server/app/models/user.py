@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import enum
+import secrets
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Boolean, DateTime, Enum, Integer
@@ -8,6 +9,9 @@ from app.core.database import Base
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+def _gen_id() -> str:
+    return secrets.token_hex(3)
 
 class UserRole(str, enum.Enum):
     # Đổi tên thành chữ thường để khớp với nhãn trong Postgres ENUM
@@ -17,7 +21,7 @@ class UserRole(str, enum.Enum):
 class User(Base):
     __tablename__ = "users"
 
-    user_id = Column(String(6), primary_key=True, index=True)
+    user_id = Column(String(6), primary_key=True, index=True, default=_gen_id)
     username = Column(String(100), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
     role = Column(Enum(UserRole, name="user_role", native_enum=False), default=UserRole.operator, nullable=False)
