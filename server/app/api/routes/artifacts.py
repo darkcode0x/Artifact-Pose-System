@@ -116,6 +116,58 @@ def create_artifact(
     return _serialize(artifact)
 
 
+@router.post("/{artifact_id}/inspect-from-device", response_model=InspectionRead)
+def inspect_artifact_from_device(
+    artifact_id: str,
+    device_id: str,
+    description: str = "",
+    created_by: str = "",
+    db: Session = Depends(get_db),
+    container: AppContainer = Depends(get_container),
+) -> InspectionRead:
+    """Run AI inspection on the most recent image captured by the device for this artifact."""
+    artifact = db.query(Artifact).filter(Artifact.artifact_id == artifact_id).first()
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    metadata = container.command_service.get_latest_capture_metadata(device_id)
+    if not metadata:
+        raise HTTPException(
+            status_code=404,
+            detail="No capture metadata for this device. Run alignment first.",
+        )
+
+    full_path_str = metadata.get("saved_file_full_path")
+    if not full_path_str:
+        raise HTTPException(
+            status_code=404,
+            detail="No saved image path in device metadata. Run alignment first.",
+        )
+
+    image_path = Path(full_path_str)
+    if not image_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Image file not found on server: {image_path.name}",
+        )
+
+    try:
+        image_bytes = image_path.read_bytes()
+        record = container.inspection_service.run_artifact_inspection(
+            db=db,
+            artifact=artifact,
+            image_bytes=image_bytes,
+            original_filename=image_path.name,
+            description=description or f"Device workflow: {device_id}",
+            inspection_type=InspectionType.sudden,
+            created_by=created_by or None,
+        )
+        return _serialize_comparison(record)
+    except Exception as e:
+        logger.error(f"inspect-from-device failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+
 @router.post("/{artifact_id}/inspect", response_model=InspectionRead)
 async def inspect_artifact(
     artifact_id: str,

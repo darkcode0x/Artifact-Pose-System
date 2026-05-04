@@ -41,7 +41,7 @@ class APIClient:
 		- O day IoT node dong vai tro client, chu dong goi API de nhan lenh.
 		- Server du kien tra ve JSON chua action, direction, angle/step.
 		"""
-		endpoint = f"/devices/{self.config.device_id}/move"
+endpoint = f"/api/v1/devices/{self.config.device_id}/move"
 
 		try:
 			response = requests.post(
@@ -68,7 +68,7 @@ class APIClient:
 		Endpoint: POST /devices/get_device_id
 		Payload: {"machine_hash": "...", "preferred_device_id": "..."}
 		"""
-		endpoint = "/devices/get_device_id"
+		endpoint = "/api/v1/devices/get_device_id"
 		payload: Dict[str, Any] = {"machine_hash": machine_hash}
 		if preferred_device_id:
 			payload["preferred_device_id"] = preferred_device_id

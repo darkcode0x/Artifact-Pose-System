@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/artifact.dart';
@@ -11,7 +10,7 @@ import '../../services/token_storage.dart';
 import '../../theme.dart';
 import '../../widgets/responsive_scaffold.dart';
 import '../../widgets/status_badge.dart';
-import '../capture/capture_screen.dart';
+import '../devices/device_workflow_screen.dart';
 import '../inspect/result_screen.dart';
 import 'edit_artifact_screen.dart';
 
@@ -51,40 +50,13 @@ class _ArtifactDetailContentState extends State<_ArtifactDetailContent> {
     if (mounted) setState(() => _userRole = role);
   }
 
-  Future<void> _captureReference() async {
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.camera,
-      maxWidth: 1920,
-      imageQuality: 92,
-    );
-    if (picked == null || !mounted) return;
-
-    setState(() => _busy = true);
-    // Sửa lỗi: Truyền picked (XFile) trực tiếp
-    final updated = await context
-        .read<ArtifactProvider>()
-        .uploadReference(_artifact.id, picked);
-        
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      if (updated != null) _artifact = updated;
-    });
-  }
-
   Future<void> _runInspection() async {
-    final inspection = await Navigator.push<Inspection?>(
+    await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => CaptureScreen(artifact: _artifact),
-      ),
-    );
-    if (inspection == null || !mounted) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ResultScreen(inspection: inspection),
+        builder: (_) => DeviceWorkflowScreen(
+          preselectedArtifactId: _artifact.id,
+        ),
       ),
     );
   }
@@ -226,18 +198,11 @@ class _ArtifactDetailContentState extends State<_ArtifactDetailContent> {
                       ),
                     ),
                     const SizedBox(height: 24),
-                    if (!_artifact.hasImage)
-                      _CallToAction(
-                        icon: Icons.settings_remote,
-                        label: 'Trigger Device Camera (Reference)',
-                        onPressed: _captureReference,
-                      )
-                    else
-                      _CallToAction(
-                        icon: Icons.search,
-                        label: 'Run inspection',
-                        onPressed: _runInspection,
-                      ),
+                    _CallToAction(
+                      icon: Icons.search,
+                      label: 'Kiểm tra qua thiết bị IoT',
+                      onPressed: _runInspection,
+                    ),
                     const SizedBox(height: 24),
                   ],
                 ),

@@ -1,10 +1,21 @@
-# Hướng dẫn Deploy & Test qua USB (không cần WiFi)
+# Hướng dẫn Deploy & Test — USB (adb reverse) hoặc WiFi LAN
 
-**Mục tiêu:** Chạy server trên máy tính, cài app Flutter lên điện thoại Android qua dây USB, điện thoại gọi API server thông qua `adb reverse`.
+**Mục tiêu:** Chạy server Docker trên máy tính, kết nối app Flutter trên điện thoại Android tới server — qua dây USB (dùng `adb reverse`) **hoặc** qua WiFi LAN.
 
 ---
 
-## Kiến trúc khi dùng USB
+## Chọn phương thức kết nối
+
+| Phương thức | Điều kiện | Lệnh build app |
+|---|---|---|
+| **USB + adb reverse** | Cắm dây USB, bật USB Debugging | `--dart-define=API_BASE_URL=http://127.0.0.1:8000` |
+| **WiFi LAN** | PC và điện thoại cùng mạng WiFi | `--dart-define=API_BASE_URL=http://<IP_PC>:8000` |
+
+> **Quan trọng về 127.0.0.1:** Khi dùng `adb reverse tcp:8000 tcp:8000`, lệnh này tạo một **tunnel từ điện thoại lên máy tính**. Lúc này `127.0.0.1:8000` trên điện thoại **không phải** điện thoại — mà thực sự đi đến `127.0.0.1:8000` trên **máy tính**. Nếu không có `adb reverse` chạy trước, app sẽ không kết nối được server.
+
+---
+
+## Kiến trúc khi dùng USB (adb reverse)
 
 ```
 ┌──────────────────────────────┐
@@ -22,11 +33,41 @@
 │                              │
 │  Flutter App                 │
 │  → gọi http://127.0.0.1:8000 │
-│    (được forward qua USB)    │
+│    tunnel qua USB đến PC     │
 └──────────────────────────────┘
 ```
 
-**Nguyên lý:** `adb reverse` tạo một tunnel từ `127.0.0.1:8000` trên điện thoại → `127.0.0.1:8000` trên máy tính. App Flutter dùng `API_BASE_URL=http://127.0.0.1:8000` sẽ tự động đi qua USB.
+---
+
+## Kiến trúc khi dùng WiFi LAN
+
+```
+┌──────────────────────────────┐
+│  MÁY TÍNH (IP: 192.168.x.y)  │
+│  Docker: FastAPI :8000       │
+│  Firewall: mở port 8000      │
+└──────────────┬───────────────┘
+               │ WiFi Router
+┌──────────────▼───────────────┐
+│  ĐIỆN THOẠI ANDROID          │
+│  Flutter App                 │
+│  → http://192.168.x.y:8000   │
+└──────────────────────────────┘
+```
+
+---
+
+## Cấu hình IP trong app
+
+File: `client/artifact_app/lib/services/api_config.dart`
+
+```dart
+// Thay đổi IP này thành IP LAN thực tế của máy tính bạn
+static const String _pcIp = '192.168.1.169';
+```
+
+- Nếu dùng **WiFi LAN**: sửa `_pcIp` thành IP WiFi của PC (xem bằng `ip addr` / `ipconfig`)
+- Nếu dùng **USB adb reverse**: truyền `--dart-define=API_BASE_URL=http://127.0.0.1:8000` khi build/run
 
 ---
 
@@ -40,7 +81,7 @@
 
 ---
 
-## Bước 1 — Bật Developer Options trên điện thoại
+## Bước 1 — Bật Developer Options trên điện thoại (chỉ cho USB)
 
 1. Vào **Cài đặt → Giới thiệu điện thoại**
 2. Nhấn **Số phiên bản** (Build number) **7 lần liên tiếp** → bật chế độ nhà phát triển
@@ -48,130 +89,140 @@
 4. Bật **USB Debugging** (Gỡ lỗi USB)
 5. Cắm dây USB vào máy tính → điện thoại hiện hộp thoại, chọn **Cho phép**
 
----
-
-## Bước 2 — Kiểm tra kết nối USB
-
 ```bash
 adb devices
+# Kết quả: trạng thái "device", không phải "unauthorized"
 ```
-
-Kết quả mong đợi (thiết bị phải ở trạng thái `device`, không phải `unauthorized`):
-
-```
-List of devices attached
-XXXXXXXXXXXXXXXX    device
-```
-
-> Nếu hiện `unauthorized`: mở khóa điện thoại, chấp nhận lại hộp thoại USB Debugging.
 
 ---
 
-## Bước 3 — Khởi động Server (Docker)
+## Bước 2 — Khởi động Server (Docker)
 
 ```bash
 cd /home/thepiece/System/Artifact-Pose-System/server
 ```
 
 ### Lần đầu (build image):
-
 ```bash
 docker compose --env-file .env.docker up -d --build
 ```
 
-### Các lần sau (đã build rồi):
-
+### Các lần sau:
 ```bash
 docker compose --env-file .env.docker up -d
 ```
 
-### Kiểm tra server đang chạy:
-
+### Kiểm tra server OK:
 ```bash
-# Health check
 curl http://127.0.0.1:8000/health
-
-# Xem logs server (Ctrl+C để thoát)
-docker compose --env-file .env.docker logs -f server
+# → {"status":"ok"}
 ```
 
-Kết quả `curl` mong đợi:
-```json
-{"status":"ok"}
-```
-
-### Kiểm tra tài khoản admin đã được tạo:
-
+### Kiểm tra tài khoản admin:
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"123456"}'
 ```
 
+### (Nếu dùng WiFi) Mở port 8000 trên firewall:
+```bash
+# Linux (UFW)
+sudo ufw allow 8000/tcp
+
+# Kiểm tra IP PC để cấu hình cho app
+ip -4 addr show | grep -oP '(?<=inet )192\.[0-9.]+'
+```
+
 ---
 
-## Bước 4 — Thiết lập adb reverse (tunnel USB)
+## Bước 3 — Thiết lập adb reverse (chỉ cho USB)
 
 ```bash
 adb reverse tcp:8000 tcp:8000
 ```
 
-> Lệnh này phải chạy **sau mỗi lần cắm lại USB** hoặc khởi động lại điện thoại.
+> ⚠️ **Phải chạy lại lệnh này sau mỗi lần:**
+> - Cắm lại dây USB
+> - Khởi động lại điện thoại
+> - `adb kill-server` / `adb start-server`
 
-Kiểm tra tunnel hoạt động từ điện thoại (tùy chọn — nếu có adb shell):
-
+Kiểm tra tunnel còn hoạt động:
 ```bash
-adb shell curl -s http://127.0.0.1:8000/health
+adb reverse --list
+# → 8000 tcp:8000  (tunnel đang active)
 ```
 
 ---
 
-## Bước 5 — Build & Deploy Flutter App lên điện thoại
+## Bước 4 — Build & Deploy Flutter App
 
 ```bash
 cd /home/thepiece/System/Artifact-Pose-System/client/artifact_app
-```
-
-### Install dependencies:
-
-```bash
 flutter pub get
 ```
 
-### Build và cài thẳng lên điện thoại (debug mode, nhanh):
+### Cách A: USB + adb reverse (127.0.0.1)
 
 ```bash
-flutter run \
-  --dart-define=API_BASE_URL=http://127.0.0.1:8000 \
-  -d $(adb devices | grep -v "List" | grep "device" | awk '{print $1}')
-```
+# Debug mode (nhanh, dùng để test)
+flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
 
-Hoặc chỉ định thiết bị thủ công:
+rm -rf .dart_tool
+rm -rf build
+flutter clean
+flutter pub get
 
-```bash
-# Xem danh sách thiết bị
-flutter devices
+# Release APK (cài thủ công)
+flutter build apk --release --dart-define=API_BASE_URL=http://127.0.0.1:8000
+adb install build/app/outputs/flutter-apk/app-release.apk
 
-# Chạy lên thiết bị cụ thể (thay DEVICE_ID bằng ID từ lệnh trên)
-flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000 -d DEVICE_ID
-```
-
-> `--dart-define=API_BASE_URL=http://127.0.0.1:8000` — bắt buộc để app dùng địa chỉ USB tunnel thay vì IP cứng trong code.
-
-### Build APK release (cài thủ công):
-
-```bash
-flutter build apk \
-  --release \
-  --dart-define=API_BASE_URL=http://127.0.0.1:8000
-
-# Cài APK lên điện thoại
+adb install -r build/app/outputs/flutter-apk/app-release.apk cài đè
+//cài lại
+adb uninstall com.pbl5.artifactapp
 adb install build/app/outputs/flutter-apk/app-release.apk
 ```
 
+### Cách B: WiFi LAN (thay IP thực tế của PC)
+
+```bash
+# Xem IP WiFi của PC
+ip -4 addr show | grep -oP '(?<=inet )192\.[0-9.]+'
+
+# Debug mode
+flutter run --dart-define=API_BASE_URL=http://192.168.x.y:8000
+
+# Release APK
+flutter build apk --release --dart-define=API_BASE_URL=http://192.168.x.y:8000
+adb install build/app/outputs/flutter-apk/app-release.apk
+```
+
+> Hoặc sửa `_pcIp` trong `api_config.dart` thành IP thực và build không cần `--dart-define`.
+
 ---
 
-## Bước 6 — Test đầy đủ trên giao diện
+## Bước 5 — Kiểm tra thiết bị IoT (Raspberry Pi) đã đăng ký
+
+Raspberry Pi tự đăng ký khi khởi động bằng cách gọi `POST /api/v1/devices/get_device_id`. Thiết bị `dev-bbb742d369` đã được đăng ký sẵn trong DB.
+
+Kiểm tra:
+```bash
+docker exec artifact_postgres psql -U artifact -d artifact_auth \
+  -c "SELECT device_id, device_code, status FROM iot_devices;"
+```
+
+Kết quả mong đợi:
+```
+ device_id |  device_code   | status
+-----------+----------------+---------
+ bbb742    | dev-bbb742d369 | offline
+```
+
+Khi Pi kết nối và gửi tín hiệu MQTT, status tự chuyển thành `online`.
+
+---
+
+## Bước 6 — Test trên giao diện app
 
 ### Tài khoản mặc định
 
@@ -184,141 +235,91 @@ adb install build/app/outputs/flutter-apk/app-release.apk
 ### 6.1 Đăng nhập
 
 1. Mở app → màn hình **Đăng nhập**
-2. Nhập `admin` / `123456`
-3. Nhấn **Đăng nhập**
-4. ✅ Thành công: chuyển vào **Admin Dashboard**
+2. Nhập `admin` / `123456` → **Đăng nhập**
+3. ✅ Chuyển vào **Admin Dashboard**
 
 ---
 
 ### 6.2 Quản lý Hiện vật (Artifacts)
 
-**Tạo hiện vật mới:**
-1. Vào tab **Hiện vật** (Artifacts)
-2. Nhấn nút **+** (thêm mới)
-3. Điền Tên, Mô tả, Địa điểm
-4. Nhấn **Lưu**
-5. ✅ Hiện vật xuất hiện trong danh sách
+1. Vào tab **Hiện vật**
+2. Nhấn **+** → điền Tên, Mô tả, Địa điểm → **Lưu**
+3. ✅ Hiện vật xuất hiện trong danh sách
 
-**Chỉnh sửa hiện vật:**
-1. Nhấn vào hiện vật → màn hình chi tiết
-2. Nhấn icon **Chỉnh sửa**
-3. Sửa thông tin → **Lưu**
-
-**Xóa hiện vật:**
-1. Vào chi tiết hiện vật
-2. Nhấn **Xóa** → xác nhận
+**Chi tiết hiện vật:**
+- Nhấn vào hiện vật → xem thông tin và lịch sử kiểm tra
+- Nhấn **Kiểm tra qua thiết bị IoT** để bắt đầu quy trình IoT 3 bước
 
 ---
 
-### 6.3 Upload ảnh tham chiếu (Baseline Image)
+### 6.3 Quy trình Kiểm tra IoT (3 bước)
 
-1. Vào chi tiết hiện vật
-2. Nhấn **Upload ảnh tham chiếu**
-3. Chọn ảnh từ thư viện / camera
-4. ✅ Ảnh hiển thị trong màn hình chi tiết
+Truy cập bằng 2 cách:
+- Tab **Thiết bị** → chọn thiết bị → màn hình workflow
+- Chi tiết hiện vật → **Kiểm tra qua thiết bị IoT**
+
+#### Bước 1 — Khởi tạo Golden Pose
+1. Chọn thiết bị `dev-bbb742d369` từ dropdown (nếu chưa chọn sẵn)
+2. Chọn hiện vật cần kiểm tra
+3. Nhập **Baseline (mm)** — khoảng cách giữa 2 camera stereo (mặc định: 100mm)
+4. Nhấn **Bắt đầu Khởi tạo**
+5. ✅ Raspberry Pi nhận lệnh qua MQTT, chụp ảnh stereo, lưu golden pose
+
+#### Bước 2 — Căn chỉnh tư thế
+1. Nhấn **Bắt đầu Căn chỉnh**
+2. Pi bắt đầu vòng lặp chụp-tính-điều chỉnh
+3. App tự refresh log ACK mỗi 3 giây để hiển thị kết quả từng bước
+4. Khi tư thế đã khớp với golden pose → nhấn **Căn chỉnh xong**
+
+#### Bước 3 — AI Kiểm tra hư hại
+1. Nhấn **Kiểm tra AI**
+2. Server dùng ảnh đã chụp từ Pi (không cần upload từ điện thoại)
+3. ✅ Kết quả: điểm hư hại (0–10), trạng thái (good/warning/damaged), SSIM
+4. Nhấn **Xem kết quả** để xem chi tiết
 
 ---
 
-### 6.4 Thực hiện kiểm tra (Inspection)
+### 6.4 Quản lý Thiết bị (Devices)
 
-1. Vào chi tiết hiện vật (đã có ảnh tham chiếu)
-2. Nhấn **Kiểm tra ngay** (Sudden Inspection)
-3. Chụp / chọn ảnh hiện tại của hiện vật
-4. Chờ server xử lý AI
-5. ✅ Kết quả hiển thị: điểm hư hại, trạng thái (good/warning/damaged), ảnh heatmap
+- Vào tab **Thiết bị** → danh sách thiết bị đã đăng ký trong DB
+- Nhấn vào thiết bị → màn hình workflow 3 bước
+- Nhấn icon **ℹ️** → thông tin thiết bị và lịch sử ACK
+
+> **Lưu ý:** Thiết bị tự đăng ký qua API khi Pi khởi động. App không có chức năng thêm/xóa thiết bị thủ công.
 
 ---
 
 ### 6.5 Quản lý Lịch kiểm tra (Schedules)
 
-**Tạo lịch:**
-1. Vào tab **Lịch** (Schedule)
-2. Nhấn **+** → chọn hiện vật, ngày, giờ, operator
+1. Vào tab **Lịch** → nhấn **+** → chọn hiện vật, ngày, giờ, operator → **Lưu**
+
+---
+
+### 6.6 Quản lý Người dùng (Users) — Admin
+
+1. Vào **Admin Dashboard → Người dùng**
+2. Nhấn **+** → điền username, password, full name, role: `operator`
 3. Nhấn **Lưu**
 
-**Xem lịch:**
-- Danh sách sắp xếp theo ngày
-- Lọc theo ngày cụ thể
-
 ---
 
-### 6.6 Cảnh báo (Alerts)
+## Bước 7 — Test API bằng Swagger UI
 
-1. Vào tab **Cảnh báo**
-2. ✅ Hiển thị các hiện vật có trạng thái `warning` hoặc `damaged`
-
----
-
-### 6.7 Quản lý Thiết bị (Devices) — Admin
-
-1. Vào **Admin Dashboard → Thiết bị**
-2. Nhấn **+** thêm thiết bị mới (device_code, mô tả)
-3. Xem danh sách thiết bị và trạng thái
-4. Xóa thiết bị nếu cần
-
----
-
-### 6.8 Quản lý Người dùng (Users) — Admin
-
-**Tạo operator mới:**
-1. Vào **Admin Dashboard → Người dùng**
-2. Nhấn **+** → điền username, password, full name
-3. Chọn role: `operator`
-4. Nhấn **Lưu**
-
-**Chỉnh sửa user:**
-- Nhấn vào user → sửa thông tin, đổi password
-
-**Vô hiệu hóa / Kích hoạt:**
-- Toggle Active/Inactive trên màn hình chi tiết
-
-**Reset mật khẩu:**
-- Admin có thể reset password về `111111`
-
----
-
-### 6.9 Hồ sơ cá nhân (Profile)
-
-1. Vào **Profile** (góc trên phải)
-2. Chỉnh sửa: Full name, Email, Phone, Age
-3. Đổi mật khẩu: tab **Đổi mật khẩu** → nhập mật khẩu cũ + mới
-
----
-
-## Bước 7 — Test API trực tiếp bằng Swagger UI
-
-Mở trình duyệt trên **máy tính**:
-
+Mở trình duyệt trên máy tính:
 ```
 http://127.0.0.1:8000/docs
 ```
 
-Các endpoint chính:
+| Nhóm | Endpoint quan trọng |
+|---|---|
+| Auth | `POST /api/v1/auth/login` |
+| Devices | `GET /api/v1/devices` — danh sách thiết bị |
+| Devices | `GET /api/v1/devices/{id}/acks` — lịch sử ACK |
+| Workflows | `POST /workflows/{device_code}/start-initialization` |
+| Workflows | `POST /workflows/{device_code}/start-alignment` |
+| Artifacts | `POST /api/v1/artifacts/{id}/inspect-from-device` |
 
-| Nhóm | Endpoint | Mô tả |
-|---|---|---|
-| Auth | `POST /api/v1/auth/login` | Đăng nhập |
-| Auth | `POST /api/v1/auth/register` | Đăng ký (operator) |
-| Users | `GET /api/v1/users` | Danh sách users (admin) |
-| Users | `GET /api/v1/users/me` | Thông tin bản thân |
-| Users | `PATCH /api/v1/users/me` | Cập nhật profile |
-| Users | `POST /api/v1/users/me/change-password` | Đổi mật khẩu |
-| Artifacts | `GET /api/v1/artifacts` | Danh sách hiện vật |
-| Artifacts | `POST /api/v1/artifacts` | Tạo hiện vật |
-| Artifacts | `GET /api/v1/artifacts/{id}` | Chi tiết hiện vật |
-| Artifacts | `GET /api/v1/artifacts/{id}/inspections` | Lịch sử kiểm tra |
-| Inspections | `POST /inspections/upload` | Upload ảnh kiểm tra |
-| Schedules | `GET /api/v1/schedules` | Danh sách lịch |
-| Schedules | `POST /api/v1/schedules` | Tạo lịch |
-| Devices | `GET /api/v1/devices` | Danh sách thiết bị |
-| Devices | `POST /api/v1/devices` | Tạo thiết bị |
-| Health | `GET /health` | Kiểm tra server |
-
-**Cách dùng Swagger với auth:**
-1. Gọi `POST /api/v1/auth/login` → copy `access_token`
-2. Nhấn nút **Authorize** (🔒) góc trên phải
-3. Nhập `Bearer <access_token>`
-4. Test các endpoint cần auth
+> **Lưu ý:** Các endpoint workflow dùng `device_code` (như `dev-bbb742d369`) làm path param, không phải `device_id` (6-char hex).
 
 ---
 
@@ -330,51 +331,64 @@ Các endpoint chính:
 # 1. Kiểm tra server đang chạy
 curl http://127.0.0.1:8000/health
 
-# 2. Kiểm tra tunnel USB còn active
+# 2. Kiểm tra tunnel USB còn active (chế độ adb reverse)
 adb reverse --list
-
-# 3. Nếu không thấy tcp:8000, thiết lập lại
+# Nếu không thấy tcp:8000:
 adb reverse tcp:8000 tcp:8000
+
+# 3. Chế độ WiFi: kiểm tra IP PC có đúng không
+ip -4 addr show | grep inet
+# Rebuild với IP mới nếu thay đổi
 ```
 
 ### Điện thoại hiện `unauthorized`
 
 ```bash
-# Reset kết nối ADB
-adb kill-server
-adb start-server
-adb devices
-# → mở khóa điện thoại, chấp nhận hộp thoại USB Debugging
+adb kill-server && adb start-server && adb devices
+# Mở khóa điện thoại → chấp nhận hộp thoại USB Debugging
 ```
 
 ### Server lỗi khi khởi động
 
 ```bash
 cd server
-# Xem log chi tiết
 docker compose --env-file .env.docker logs server
-
-# Khởi động lại stack
 docker compose --env-file .env.docker down
 docker compose --env-file .env.docker up -d --build
+```
+
+### Thiết bị IoT không nhận lệnh
+
+```bash
+# Kiểm tra device đã có trong DB
+docker exec artifact_postgres psql -U artifact -d artifact_auth \
+  -c "SELECT device_id, device_code, status FROM iot_devices;"
+
+# Kiểm tra MQTT kết nối
+docker logs artifact_mosquitto
+
+# Kiểm tra MQTT bridge trong server logs
+cd server && docker compose --env-file .env.docker logs server | grep -i mqtt
 ```
 
 ### Reset toàn bộ database
 
 ```bash
 cd server
-docker compose --env-file .env.docker down -v   # xóa cả volume
+docker compose --env-file .env.docker down -v   # ⚠️ xóa toàn bộ dữ liệu
 docker compose --env-file .env.docker up -d --build
+# Sau đó tạo lại admin:
+docker exec -it artifact_server python tools/create_admin.py
+# Và insert lại device:
+docker exec artifact_postgres psql -U artifact -d artifact_auth \
+  -c "INSERT INTO iot_devices VALUES ('bbb742','dev-bbb742d369','Raspberry Pi Camera','offline',NOW()) ON CONFLICT DO NOTHING;"
 ```
-
-> ⚠️ Lệnh này xóa toàn bộ dữ liệu PostgreSQL.
 
 ### Flutter build lỗi
 
 ```bash
 cd client/artifact_app
-flutter clean
-flutter pub get
+flutter clean && flutter pub get
 flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
 ```
 
@@ -383,14 +397,40 @@ flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
 ## Tóm tắt lệnh nhanh (chạy mỗi phiên làm việc)
 
 ```bash
-# Terminal 1 — Khởi động server
+# === Terminal 1: Khởi động server ===
 cd /home/thepiece/System/Artifact-Pose-System/server
 docker compose --env-file .env.docker up -d
-curl http://127.0.0.1:8000/health   # xác nhận server OK
+curl http://127.0.0.1:8000/health     # xác nhận OK
 
-# Terminal 2 — Thiết lập USB + chạy app
-adb devices                          # xác nhận điện thoại kết nối
-adb reverse tcp:8000 tcp:8000        # tạo tunnel USB
+# === Terminal 2: USB mode (adb reverse) ===
+adb devices                            # xác nhận điện thoại kết nối
+adb reverse tcp:8000 tcp:8000          # ← BẮT BUỘC, chạy sau mỗi lần cắm lại
 cd /home/thepiece/System/Artifact-Pose-System/client/artifact_app
 flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
+
+# === Hoặc: WiFi mode (thay IP thực tế của PC) ===
+flutter run --dart-define=API_BASE_URL=http://192.168.x.y:8000
 ```
+
+
+Chạy trước:
+
+usbipd list
+
+Bạn sẽ thấy dạng như:
+
+BUSID  VID:PID    DEVICE
+1-4    18d1:4ee7 Android
+
+Lấy giá trị ở cột BUSID, rồi attach:
+
+usbipd bind --busid 1-4
+
+usbipd attach --wsl --busid 1-4
+
+Sau đó quay lại WSL:
+
+adb devices
+
+
+docker compose logs -f server

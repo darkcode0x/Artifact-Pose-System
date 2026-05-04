@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/iot_device.dart';
-import '../../providers/auth_provider.dart';
 import '../../services/api_client.dart';
 import '../../services/device_service.dart';
 import '../../theme.dart';
 import '../../widgets/responsive_scaffold.dart';
 import 'device_detail_screen.dart';
+import 'device_workflow_screen.dart';
 
 class DeviceListScreen extends StatefulWidget {
   const DeviceListScreen({super.key});
@@ -38,76 +38,8 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     await _devicesFuture;
   }
 
-  Future<void> _addDevice() async {
-    final codeController = TextEditingController();
-    final descController = TextEditingController();
-
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add New Device'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: codeController,
-              decoration: const InputDecoration(
-                labelText: 'Device Code (Unique)',
-                hintText: 'e.g. pi-cam-01',
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: descController,
-              decoration: const InputDecoration(labelText: 'Description'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Add')),
-        ],
-      ),
-    );
-
-    if (confirm != true) return;
-    final code = codeController.text.trim();
-    if (code.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Device code is required')),
-        );
-      }
-      return;
-    }
-    try {
-      await _service.create(code, description: descController.text.trim());
-      _refresh();
-    } on ApiException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message)),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final auth = context.watch<AuthProvider>();
-    // Both Admin and Operator can add devices.
-    final canAdd = auth.isAdmin || auth.role == 'operator';
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('IoT Devices'),
@@ -142,9 +74,9 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                     SizedBox(height: 80),
                     EmptyStateView(
                       icon: Icons.devices_other_outlined,
-                      title: 'No devices registered',
+                      title: 'Chưa có thiết bị nào',
                       subtitle:
-                          'Tap "Add Device" to register a new IoT device.',
+                          'Thiết bị sẽ tự đăng ký khi Raspberry Pi kết nối tới server.',
                     ),
                   ],
                 );
@@ -155,6 +87,17 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                 itemBuilder: (context, i) => _DeviceCard(
                   device: devices[i],
                   onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => DeviceWorkflowScreen(
+                          device: devices[i],
+                        ),
+                      ),
+                    );
+                    _refresh();
+                  },
+                  onInfo: () async {
                     await Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -172,15 +115,6 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
           ),
         ),
       ),
-      floatingActionButton: canAdd
-          ? FloatingActionButton.extended(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              onPressed: _addDevice,
-              label: const Text('Add Device'),
-              icon: const Icon(Icons.add),
-            )
-          : null,
     );
   }
 }
@@ -188,8 +122,9 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
 class _DeviceCard extends StatelessWidget {
   final IotDevice device;
   final VoidCallback onTap;
+  final VoidCallback onInfo;
 
-  const _DeviceCard({required this.device, required this.onTap});
+  const _DeviceCard({required this.device, required this.onTap, required this.onInfo});
 
   @override
   Widget build(BuildContext context) {
@@ -209,7 +144,17 @@ class _DeviceCard extends StatelessWidget {
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         subtitle: Text('Status: ${device.status.name.toUpperCase()}'),
-        trailing: const Icon(Icons.chevron_right),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: 'Device details',
+              icon: const Icon(Icons.info_outline, color: AppColors.textMuted),
+              onPressed: onInfo,
+            ),
+            const Icon(Icons.play_circle_outline, color: AppColors.primary),
+          ],
+        ),
         onTap: onTap,
       ),
     );

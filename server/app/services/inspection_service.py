@@ -232,6 +232,67 @@ class InspectionService:
             result["auto_description"] = f"Analysis failed: {str(e)}"
             return result
 
+    async def handle_upload(self, file: UploadFile, metadata_str: str) -> dict[str, Any]:
+        """Save image uploaded by device agent, run pose correction, record latest metadata."""
+        import json as _json
+        try:
+            meta = _json.loads(metadata_str)
+        except Exception as exc:
+            raise ValueError(f"Invalid metadata JSON: {exc}") from exc
+
+        device_id = str(meta.get("device_id", ""))
+        artifact_id = str(meta.get("artifact_id", ""))
+        calibration_data = meta.get("calibration_data", {})
+
+        saved_path, size_bytes = await self._save_file(file)
+
+        # Record metadata so the latest capture can be retrieved later
+        capture_metadata: dict[str, Any] = {
+            "saved_file": saved_path.name,
+            "saved_file_full_path": str(saved_path),
+            "device_id": device_id,
+            "artifact_id": artifact_id,
+        }
+        if isinstance(calibration_data, dict):
+            capture_metadata.update(calibration_data)
+
+        self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
+
+        # Attempt pose correction (non-fatal if it fails)
+        pose_result: dict[str, Any] | None = None
+        correction_dispatch: dict[str, Any] | None = None
+        try:
+            pose_result = self._pose_service.correct_image(saved_path)
+            # If correction is needed, dispatch a move command via MQTT
+            deviation = pose_result.get("deviation") if pose_result else None
+            if deviation and not deviation.get("within_tolerance", True):
+                motor_cmd = pose_result.get("motor_command")
+                if motor_cmd and device_id:
+                    mc_payload: dict[str, Any] = {
+                        "action": "move",
+                        "task_id": self._command_service.build_task_id(),
+                        "artifact_id": artifact_id,
+                        **motor_cmd,
+                        "workflow": calibration_data.get("workflow", {}),
+                    }
+                    published, result_info = self._mqtt_bridge.publish_command(device_id, mc_payload)
+                    correction_dispatch = {
+                        "status": "published" if published else "queued",
+                        "info": result_info,
+                    }
+        except Exception as exc:
+            logger.warning(f"Pose correction skipped for device={device_id}: {exc}")
+
+        return {
+            "ok": True,
+            "message": "Uploaded successfully",
+            "saved_file": saved_path.name,
+            "size_bytes": size_bytes,
+            "pose_result": pose_result,
+            "correction_dispatch": correction_dispatch,
+            "ai_result": None,
+        }
+
     def reset_alignment_counter(self, device_id: str, artifact_id: str) -> None:
         alignment_key = f"{device_id}:{artifact_id}"
         self._alignment_counters.pop(alignment_key, None)
