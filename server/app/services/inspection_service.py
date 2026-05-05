@@ -202,22 +202,26 @@ class InspectionService:
 
                     diff = cv2.absdiff(gray_ref, gray_cur)
                     diff_blur = cv2.GaussianBlur(diff, (5, 5), 0)
-                    _, mask = cv2.threshold(diff_blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                    damage_pct = float(cv2.countNonZero(mask)) / float(h * w) * 100.0
 
                     heatmap_overlay = cv2.addWeighted(cur_cmp, 0.6, cv2.applyColorMap(diff_blur, cv2.COLORMAP_JET), 0.4, 0)
                     heatmap_filename = f"heatmap_{artifact_id}_{ts_ms}.jpg"
                     cv2.imwrite(str(self._settings.uploads_dir / heatmap_filename), heatmap_overlay)
-
-                    result["damage_score"] = damage_pct
                     result["heatmap_path"] = heatmap_filename
-                    result["auto_description"] = f"SSIM: {damage_pct:.1f}% thay đổi."
 
+                    # Compute SSIM first, then derive damage_score from it.
+                    # SSIM is the primary metric: 0.9595 → damage = (1-0.9595)*100 = 4.05%
+                    # This avoids Otsu threshold inflating the score on minor lighting changes.
                     try:
                         from skimage.metrics import structural_similarity
-                        result["ssim"] = float(structural_similarity(gray_ref, gray_cur, win_size=7))
+                        ssim_val = float(structural_similarity(gray_ref, gray_cur, win_size=7))
+                        result["ssim"] = ssim_val
+                        damage_pct = max(0.0, (1.0 - ssim_val) * 100.0)
                     except Exception:
-                        pass
+                        # Fallback: mean normalised pixel diff (gentler than Otsu)
+                        damage_pct = float(np.mean(diff_blur)) / 255.0 * 100.0
+
+                    result["damage_score"] = damage_pct
+                    result["auto_description"] = f"SSIM: {result.get('ssim', 0):.4f} → {damage_pct:.1f}% sai lệch."
             except Exception as ssim_exc:
                 logger.error(f"[analyze] SSIM/heatmap error: {ssim_exc}")
         else:
@@ -238,10 +242,10 @@ class InspectionService:
                 "LOW":    (0,   200, 128),  # xanh lá
             }
             _CLS_VN = {
-                "material_loss": "Mất vật liệu", "peel": "Bong tróc",
-                "scratch": "Trầy xước", "fold": "Gập/méo",
-                "writing_marks": "Vết viết", "dirt": "Bẩn",
-                "staning": "Vết ố", "burn_marks": "Vết cháy",
+                "material_loss": "Mat vat lieu", "peel": "Bong troc",
+                "scratch": "Tray xuoc", "fold": "Gap/meo",
+                "writing_marks": "Vet viet", "dirt": "Ban",
+                "staning": "Vet o", "burn_marks": "Vet chay",
             }
             annotated = current_img.copy()
             for res_item in (yolo_result or []):

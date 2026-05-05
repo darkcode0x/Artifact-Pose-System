@@ -123,10 +123,10 @@ def run_initialization(
         STEREO_BASELINE,
     )
 
-    if pts3d is None or len(pts3d) < 10:
+    if pts3d is None or len(pts3d) < 5:
         got = 0 if pts3d is None else len(pts3d)
         logger.error(
-            "[initialize_golden] Stereo triangulation failed: only %d valid 3D points (need >=10). "
+            "[initialize_golden] Stereo triangulation failed: only %d valid 3D points (need >=5). "
             "Check baseline_steps, image overlap, and that both images are in focus.",
             got,
         )
