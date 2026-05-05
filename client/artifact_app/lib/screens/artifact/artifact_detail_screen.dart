@@ -231,18 +231,28 @@ class _ReferenceImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final url = ApiConfig.resolveAssetUrl(artifact.referenceImagePath);
-    return AspectRatio(
-      aspectRatio: 16 / 9,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: artifact.hasImage && url.isNotEmpty
-            ? Image.network(
-                url,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => _placeholder(broken: true),
-              )
-            : _placeholder(),
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Ảnh tham chiếu (Golden)',
+          style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+        ),
+        const SizedBox(height: 4),
+        AspectRatio(
+          aspectRatio: 16 / 9,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: artifact.hasImage && url.isNotEmpty
+                ? Image.network(
+                    url,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _placeholder(broken: true),
+                  )
+                : _placeholder(),
+          ),
+        ),
+      ],
     );
   }
 
@@ -250,12 +260,26 @@ class _ReferenceImage extends StatelessWidget {
     return Container(
       color: AppColors.surfaceMuted,
       child: Center(
-        child: Icon(
-          broken
-              ? Icons.broken_image_outlined
-              : Icons.image_not_supported_outlined,
-          size: 56,
-          color: AppColors.textFaint,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              broken
+                  ? Icons.broken_image_outlined
+                  : Icons.image_not_supported_outlined,
+              size: 56,
+              color: AppColors.textFaint,
+            ),
+            if (!broken)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text(
+                  'Chưa có ảnh tham chiếu\n(Chạy khởi tạo golden pose)',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, color: AppColors.textFaint),
+                ),
+              ),
+          ],
         ),
       ),
     );

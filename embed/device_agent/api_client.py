@@ -141,6 +141,7 @@ class APIClient:
 		self,
 		left_path: Path,
 		right_path: Path,
+		artifact_id: Optional[str] = None,
 	) -> Optional[Dict[str, Any]]:
 		"""Upload cap anh stereo (left, right) len /pose/initialize_golden."""
 		endpoint = "/pose/initialize_golden"
@@ -156,9 +157,13 @@ class APIClient:
 					"left_file": (left_path.name, lf, "image/png"),
 					"right_file": (right_path.name, rf, "image/png"),
 				}
+				data: Dict[str, Any] = {}
+				if artifact_id:
+					data["artifact_id"] = artifact_id
 				response = requests.post(
 					self._url(endpoint),
 					files=files,
+					data=data,
 					timeout=self.config.upload_stereo_timeout_sec,
 				)
 				if not response.ok:

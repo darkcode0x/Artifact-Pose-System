@@ -61,6 +61,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
   Map<String, dynamic>? _initResult;
   Map<String, dynamic>? _alignResult;
   List<Map<String, dynamic>> _acks = [];
+  Map<String, dynamic>? _latestDeviation;
   Timer? _pollTimer;
 
   Inspection? _inspectionResult;
@@ -116,16 +117,24 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       if (!mounted) return;
+      final deviceId = _effectiveDevice?.deviceCode;
+      if (deviceId == null) return;
+
+      // Poll ACKs
       try {
-        // Use deviceCode (MQTT identifier like dev-bbb742d369) for workflow API calls
-        final deviceId = _effectiveDevice?.deviceCode;
-        if (deviceId == null) return;
-        final acks = await _workflowService.pollAcks(
-          deviceId,
-          limit: 20,
-        );
+        final acks = await _workflowService.pollAcks(deviceId, limit: 20);
         if (!mounted) return;
         setState(() => _acks = acks.reversed.toList());
+      } catch (_) {}
+
+      // Poll latest pose deviation for live alignment display
+      try {
+        final meta = await _workflowService.getLatestMetadata(deviceId);
+        final deviation = (meta['metadata'] as Map<String, dynamic>?)?['pose_deviation']
+            as Map<String, dynamic>?;
+        if (mounted && deviation != null) {
+          setState(() => _latestDeviation = deviation);
+        }
       } catch (_) {}
     });
   }
@@ -428,6 +437,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                           _initResult = null;
                           _alignResult = null;
                           _acks = [];
+                          _latestDeviation = null;
                           _inspectionResult = null;
                           _errorMessage = null;
                         });
@@ -523,6 +533,10 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
             const SizedBox(height: 10),
             _ResultChips(result: _alignResult!),
           ],
+          if (_latestDeviation != null && isRunning) ...[
+            const SizedBox(height: 10),
+            _DeviationTile(deviation: _latestDeviation!),
+          ],
           if (_acks.isNotEmpty) ...[
             const SizedBox(height: 12),
             const Text(
@@ -530,7 +544,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
               style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
             ),
             const SizedBox(height: 6),
-            ..._acks.take(6).map(_buildAckTile),
+            ..._acks.take(8).map(_buildAckTile),
           ],
           const SizedBox(height: 12),
           Row(
@@ -576,38 +590,50 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
   }
 
   Widget _buildAckTile(Map<String, dynamic> ack) {
-    final action = ack['action']?.toString() ?? '?';
-    final result = ack['result'];
-    final tsMs = ack['ts_ms'];
-    final ts = tsMs is int
-        ? DateTime.fromMillisecondsSinceEpoch(tsMs).toLocal()
-        : null;
+    // ACK structure from server: {topic, payload: {action, result, ts_ms, ...}, received_ts_ms}
+    final payload = ack['payload'] as Map<String, dynamic>? ?? {};
+    final action = payload['action']?.toString() ?? '?';
+    final result = payload['result'] as Map<String, dynamic>? ?? {};
+    final tsMs = ack['received_ts_ms'] as int? ?? payload['ts_ms'] as int?;
+    final ts = tsMs != null ? DateTime.fromMillisecondsSinceEpoch(tsMs).toLocal() : null;
 
-    String statusText = '';
+    const actionLabels = <String, String>{
+      'capture': 'Chụp ảnh',
+      'move': 'Di chuyển',
+      'alignment_complete': 'Căn chỉnh xong ✓',
+      'alignment_failed': 'Căn chỉnh thất bại ✗',
+      'capture_stereo_pair': 'Chụp stereo (Golden)',
+      'noop': 'Không làm gì',
+    };
+    final actionDisplay = actionLabels[action] ?? action;
+    final statusStr = result['status']?.toString() ?? '';
+
     IconData statusIcon = Icons.info_outline;
     Color statusColor = AppColors.textMuted;
-
-    if (result is Map) {
-      final status = result['status']?.toString() ?? '';
-      statusText = status;
-      if (status == 'ok') {
-        statusIcon = Icons.check_circle_outline;
-        statusColor = Colors.green;
-      } else if (status == 'error') {
-        statusIcon = Icons.error_outline;
-        statusColor = Colors.red;
-      } else if (status == 'ignored') {
-        statusIcon = Icons.remove_circle_outline;
-        statusColor = Colors.orange;
-      }
+    if (statusStr == 'ok') {
+      statusIcon = action == 'alignment_complete'
+          ? Icons.check_circle
+          : Icons.check_circle_outline;
+      statusColor = action == 'alignment_complete' ? Colors.green : Colors.green.shade600;
+    } else if (statusStr == 'error') {
+      statusIcon = Icons.error_outline;
+      statusColor = Colors.red;
+    } else if (statusStr == 'ignored') {
+      statusIcon = Icons.remove_circle_outline;
+      statusColor = Colors.orange;
     }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       decoration: BoxDecoration(
-        color: AppColors.surfaceMuted,
+        color: action == 'alignment_complete'
+            ? Colors.green.withOpacity(0.08)
+            : AppColors.surfaceMuted,
         borderRadius: BorderRadius.circular(8),
+        border: action == 'alignment_complete'
+            ? Border.all(color: Colors.green.shade300, width: 1)
+            : null,
       ),
       child: Row(
         children: [
@@ -615,8 +641,14 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
           const SizedBox(width: 6),
           Expanded(
             child: Text(
-              '$action${statusText.isNotEmpty ? '  ·  $statusText' : ''}',
-              style: const TextStyle(fontSize: 12),
+              actionDisplay,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: action == 'alignment_complete'
+                    ? FontWeight.bold
+                    : FontWeight.normal,
+                color: action == 'alignment_complete' ? Colors.green : null,
+              ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -625,8 +657,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
               '${ts.hour.toString().padLeft(2, '0')}:'
               '${ts.minute.toString().padLeft(2, '0')}:'
               '${ts.second.toString().padLeft(2, '0')}',
-              style: const TextStyle(
-                  fontSize: 11, color: AppColors.textFaint),
+              style: const TextStyle(fontSize: 11, color: AppColors.textFaint),
             ),
         ],
       ),
@@ -698,6 +729,71 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
 }
 
 // ─── Reusable widgets ────────────────────────────────────────────────────────
+
+class _DeviationTile extends StatelessWidget {
+  final Map<String, dynamic> deviation;
+  const _DeviationTile({required this.deviation});
+
+  String _fmt(dynamic v, String unit, {int decimals = 1}) {
+    final d = (v as num?)?.toDouble() ?? 0.0;
+    return '${d.toStringAsFixed(decimals)}$unit';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final withinTol = deviation['within_tolerance'] == true;
+    final dx = _fmt(deviation['delta_x'], 'mm');
+    final dz = _fmt(deviation['delta_z'], 'mm');
+    final transMag = _fmt(deviation['translation_mag'], 'mm');
+    final dpan = _fmt(deviation['delta_pan'], '°');
+    final dtilt = _fmt(deviation['delta_tilt'], '°');
+    final rotMag = _fmt(deviation['rotation_mag'], '°');
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: withinTol ? Colors.green.withOpacity(0.07) : Colors.orange.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: withinTol ? Colors.green.shade300 : Colors.orange.shade300,
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                withinTol ? Icons.check_circle_outline : Icons.sync,
+                size: 15,
+                color: withinTol ? Colors.green : Colors.orange,
+              ),
+              const SizedBox(width: 5),
+              Text(
+                withinTol ? 'Đã căn chỉnh đúng vị trí' : 'Đang căn chỉnh...',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: withinTol ? Colors.green : Colors.orange,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Vị trí: Δx=$dx  Δz=$dz  (tổng: $transMag)',
+            style: const TextStyle(fontSize: 11, fontFamily: 'monospace', letterSpacing: 0.3),
+          ),
+          Text(
+            'Góc:    Δpan=$dpan  Δtilt=$dtilt  (tổng: $rotMag)',
+            style: const TextStyle(fontSize: 11, fontFamily: 'monospace', letterSpacing: 0.3),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _DeviceStatusBadge extends StatelessWidget {
   final IotDevice device;

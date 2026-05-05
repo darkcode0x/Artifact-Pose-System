@@ -169,68 +169,141 @@ class InspectionService:
         return new_status if new_p > cur_p else current
 
     def _analyze_against_reference(self, *, current_path: Path, reference_path: Path | None, artifact_id: str, ts_ms: int) -> dict[str, Any]:
-        result = {
+        result: dict[str, Any] = {
             "damage_score": 0.0,
             "ssim": None,
             "heatmap_path": None,
             "auto_description": "Analysis performed.",
             "detections_json": None,
         }
-        
-        if reference_path is None or not reference_path.exists():
-            result["auto_description"] = "No reference image found. Analysis skipped."
-            return result
 
+        # Load current image once for all analysis
         try:
             import cv2
             import numpy as np
-            
-            current = cv2.imread(str(current_path))
-            reference = cv2.imread(str(reference_path))
-            
-            if current is None or reference is None:
-                result["auto_description"] = "Error: Could not decode images."
+            current_img = cv2.imread(str(current_path))
+            if current_img is None:
+                result["auto_description"] = "Lỗi: Không đọc được ảnh kiểm tra."
                 return result
-
-            h, w = reference.shape[:2]
-            if current.shape[:2] != (h, w):
-                current = cv2.resize(current, (w, h))
-
-            gray_cur = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY)
-            gray_ref = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
-            
-            diff = cv2.absdiff(gray_ref, gray_cur)
-            diff_blur = cv2.GaussianBlur(diff, (5, 5), 0)
-            _, mask = cv2.threshold(diff_blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            
-            damage_pct = float(cv2.countNonZero(mask)) / float(h * w) * 100.0
-            
-            heatmap = cv2.applyColorMap(diff_blur, cv2.COLORMAP_JET)
-            overlay = cv2.addWeighted(current, 0.6, heatmap, 0.4, 0)
-            
-            # Use relative path for URL consistency
-            heatmap_filename = f"heatmap_{artifact_id}_{ts_ms}.jpg"
-            heatmap_save_path = self._settings.uploads_dir / heatmap_filename
-            cv2.imwrite(str(heatmap_save_path), overlay)
-
-            ssim_value = None
-            try:
-                from skimage.metrics import structural_similarity
-                ssim_value = float(structural_similarity(gray_ref, gray_cur, win_size=7))
-            except Exception:
-                pass
-
-            return {
-                "damage_score": damage_pct,
-                "ssim": ssim_value,
-                "heatmap_path": heatmap_filename,
-                "auto_description": f"Auto: {damage_pct:.1f}% change detected.",
-                "detections_json": None,
-            }
-        except Exception as e:
-            logger.error(f"Analysis error: {e}")
-            result["auto_description"] = f"Analysis failed: {str(e)}"
+        except Exception as load_exc:
+            result["auto_description"] = f"Lỗi load ảnh: {load_exc}"
             return result
+
+        # ── SSIM + Heatmap (requires reference image) ────────────────────────
+        if reference_path is not None and reference_path.exists():
+            try:
+                reference_img = cv2.imread(str(reference_path))
+                if reference_img is not None:
+                    h, w = reference_img.shape[:2]
+                    cur_cmp = cv2.resize(current_img, (w, h)) if current_img.shape[:2] != (h, w) else current_img.copy()
+
+                    gray_cur = cv2.cvtColor(cur_cmp, cv2.COLOR_BGR2GRAY)
+                    gray_ref = cv2.cvtColor(reference_img, cv2.COLOR_BGR2GRAY)
+
+                    diff = cv2.absdiff(gray_ref, gray_cur)
+                    diff_blur = cv2.GaussianBlur(diff, (5, 5), 0)
+                    _, mask = cv2.threshold(diff_blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                    damage_pct = float(cv2.countNonZero(mask)) / float(h * w) * 100.0
+
+                    heatmap_overlay = cv2.addWeighted(cur_cmp, 0.6, cv2.applyColorMap(diff_blur, cv2.COLORMAP_JET), 0.4, 0)
+                    heatmap_filename = f"heatmap_{artifact_id}_{ts_ms}.jpg"
+                    cv2.imwrite(str(self._settings.uploads_dir / heatmap_filename), heatmap_overlay)
+
+                    result["damage_score"] = damage_pct
+                    result["heatmap_path"] = heatmap_filename
+                    result["auto_description"] = f"SSIM: {damage_pct:.1f}% thay đổi."
+
+                    try:
+                        from skimage.metrics import structural_similarity
+                        result["ssim"] = float(structural_similarity(gray_ref, gray_cur, win_size=7))
+                    except Exception:
+                        pass
+            except Exception as ssim_exc:
+                logger.error(f"[analyze] SSIM/heatmap error: {ssim_exc}")
+        else:
+            result["auto_description"] = "Chưa có ảnh tham chiếu — chỉ AI detect."
+
+        # ── YOLO detection + annotated image (always runs) ───────────────────
+        try:
+            yolo_result = self._model_service.detect_image(
+                self._settings.default_ai_model_name,
+                current_path.read_bytes(),
+            )
+
+            # Draw bboxes — severity-based coloring matching analyze_damage.py
+            # Severity:  HIGH ≥0.65 red,  MEDIUM ≥0.40 orange,  LOW green
+            _SEVERITY_COLOR = {
+                "HIGH":   (0,   0,   255),  # đỏ
+                "MEDIUM": (0,   128, 255),  # cam
+                "LOW":    (0,   200, 128),  # xanh lá
+            }
+            _CLS_VN = {
+                "material_loss": "Mất vật liệu", "peel": "Bong tróc",
+                "scratch": "Trầy xước", "fold": "Gập/méo",
+                "writing_marks": "Vết viết", "dirt": "Bẩn",
+                "staning": "Vết ố", "burn_marks": "Vết cháy",
+            }
+            annotated = current_img.copy()
+            for res_item in (yolo_result or []):
+                for det in res_item.get("detections", []):
+                    x1, y1, x2, y2 = [int(v) for v in det["bbox_xyxy"]]
+                    name = str(det.get("class_name", "?"))
+                    conf = float(det.get("confidence", 0))
+                    if conf >= 0.65:
+                        severity = "HIGH"
+                    elif conf >= 0.40:
+                        severity = "MEDIUM"
+                    else:
+                        severity = "LOW"
+                    color = _SEVERITY_COLOR[severity]
+                    vn_name = _CLS_VN.get(name, name)
+                    label = f"{vn_name} {conf*100:.0f}% [{severity}]"
+                    thickness = 3 if severity == "HIGH" else 2
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
+                    font_scale = 0.55
+                    (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
+                    y_top = max(0, y1 - th - baseline - 4)
+                    cv2.rectangle(annotated, (x1, y_top), (x1 + tw + 4, y1), color, -1)
+                    cv2.putText(annotated, label, (x1 + 2, y1 - baseline - 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), 1, cv2.LINE_AA)
+
+            detect_dir = self._artifact_uploads_dir / artifact_id
+            detect_dir.mkdir(parents=True, exist_ok=True)
+            detect_filename = f"detect_{artifact_id}_{ts_ms}.jpg"
+            cv2.imwrite(str(detect_dir / detect_filename), annotated)
+            annotated_url = f"/uploads/artifacts/{artifact_id}/{detect_filename}"
+
+            result["detections_json"] = json.dumps({
+                "annotated_path": annotated_url,
+                "results": yolo_result,
+            })
+
+            # ── YOLO-based damage score ───────────────────────────────────────
+            # Compute from bbox area × confidence so detections always contribute
+            # to damage_score even when there is no reference image.
+            all_dets = [d for r in (yolo_result or []) for d in r.get("detections", [])]
+            if all_dets:
+                h_img, w_img = current_img.shape[:2]
+                total_area = max(1, h_img * w_img)
+                yolo_score = 0.0
+                for det in all_dets:
+                    x1, y1, x2, y2 = [int(v) for v in det["bbox_xyxy"]]
+                    bbox_area = max(0, x2 - x1) * max(0, y2 - y1)
+                    area_pct = (bbox_area / total_area) * 100.0
+                    conf = float(det.get("confidence", 0))
+                    # Each detection contributes: confidence × sqrt(area%), scaled up
+                    yolo_score += conf * (area_pct ** 0.5) * 10.0
+                yolo_score = min(100.0, yolo_score)
+                # Use max so SSIM-based score isn't overwritten if it's higher
+                result["damage_score"] = max(result["damage_score"], yolo_score)
+                logger.info(
+                    "[analyze] YOLO damage score=%.1f from %d detection(s) for artifact=%s",
+                    yolo_score, len(all_dets), artifact_id,
+                )
+        except Exception as yolo_exc:
+            logger.warning(f"[analyze] YOLO detection skipped: {yolo_exc}")
+
+        return result
 
     async def handle_upload(self, file: UploadFile, metadata_str: str) -> dict[str, Any]:
         """Save image uploaded by device agent, run pose correction, record latest metadata."""
@@ -261,11 +334,19 @@ class InspectionService:
         # Attempt pose correction (non-fatal if it fails)
         pose_result: dict[str, Any] | None = None
         correction_dispatch: dict[str, Any] | None = None
+        workflow: dict[str, Any] = calibration_data.get("workflow", {}) if isinstance(calibration_data, dict) else {}
+        auto_alignment_loop: bool = isinstance(workflow, dict) and bool(workflow.get("auto_alignment_loop", False))
         try:
             pose_result = self._pose_service.correct_image(saved_path)
-            # If correction is needed, dispatch a move command via MQTT
             deviation = pose_result.get("deviation") if pose_result else None
+
+            # Update metadata with pose deviation so Flutter can poll it live
+            if deviation:
+                capture_metadata["pose_deviation"] = deviation
+                self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
+
             if deviation and not deviation.get("within_tolerance", True):
+                # Pose needs correction — dispatch a move command
                 motor_cmd = pose_result.get("motor_command")
                 if motor_cmd and device_id:
                     mc_payload: dict[str, Any] = {
@@ -273,15 +354,71 @@ class InspectionService:
                         "task_id": self._command_service.build_task_id(),
                         "artifact_id": artifact_id,
                         **motor_cmd,
-                        "workflow": calibration_data.get("workflow", {}),
+                        "workflow": workflow,
                     }
                     published, result_info = self._mqtt_bridge.publish_command(device_id, mc_payload)
                     correction_dispatch = {
                         "status": "published" if published else "queued",
                         "info": result_info,
                     }
+            elif auto_alignment_loop and device_id:
+                if deviation is None:
+                    # Diamond/marker not detected — retry capture
+                    logger.warning(f"[alignment] No pose detected for device={device_id}, retrying capture")
+                    retry_payload: dict[str, Any] = {
+                        "action": "capture",
+                        "task_id": self._command_service.build_task_id(),
+                        "artifact_id": artifact_id,
+                        "capture_job": calibration_data.get("capture_job", "alignment") if isinstance(calibration_data, dict) else "alignment",
+                        "basename": f"align_retry_{artifact_id}_{int(time.time() * 1000)}",
+                        "workflow": workflow,
+                    }
+                    published, result_info = self._mqtt_bridge.publish_command(device_id, retry_payload)
+                    correction_dispatch = {
+                        "status": "retry_capture_published" if published else "retry_capture_failed",
+                        "info": result_info,
+                    }
+                else:
+                    # within_tolerance=True — alignment complete, save final aligned image
+                    logger.info(f"[alignment] Pose within tolerance for device={device_id}, artifact={artifact_id}")
+
+                    # Copy last captured image to distinctive final_aligned filename
+                    if artifact_id:
+                        ts_final = int(time.time() * 1000)
+                        final_dir = self._artifact_uploads_dir / str(artifact_id)
+                        final_dir.mkdir(parents=True, exist_ok=True)
+                        final_path = final_dir / f"final_aligned_{artifact_id}_{ts_final}.png"
+                        final_path.write_bytes(saved_path.read_bytes())
+                        capture_metadata["final_aligned_path"] = str(final_path)
+                        self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
+                        logger.info(f"[alignment] Saved final aligned image: {final_path.name}")
+
+                    complete_payload: dict[str, Any] = {
+                        "action": "alignment_complete",
+                        "task_id": self._command_service.build_task_id(),
+                        "artifact_id": artifact_id,
+                        "device_id": device_id,
+                        "deviation": deviation,
+                        "workflow": workflow,
+                    }
+                    published, result_info = self._mqtt_bridge.publish_command(device_id, complete_payload)
+                    correction_dispatch = {
+                        "status": "alignment_complete_published" if published else "alignment_complete_failed",
+                        "info": result_info,
+                    }
         except Exception as exc:
             logger.warning(f"Pose correction skipped for device={device_id}: {exc}")
+            if auto_alignment_loop and device_id:
+                # Notify device that alignment failed so it stops waiting
+                failed_payload: dict[str, Any] = {
+                    "action": "alignment_failed",
+                    "task_id": self._command_service.build_task_id(),
+                    "artifact_id": artifact_id,
+                    "device_id": device_id,
+                    "reason": str(exc),
+                    "workflow": workflow,
+                }
+                self._mqtt_bridge.publish_command(device_id, failed_payload)
 
         return {
             "ok": True,

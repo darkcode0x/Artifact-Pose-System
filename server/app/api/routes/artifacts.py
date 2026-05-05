@@ -137,7 +137,7 @@ def inspect_artifact_from_device(
             detail="No capture metadata for this device. Run alignment first.",
         )
 
-    full_path_str = metadata.get("saved_file_full_path")
+    full_path_str = metadata.get("final_aligned_path") or metadata.get("saved_file_full_path")
     if not full_path_str:
         raise HTTPException(
             status_code=404,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -29,21 +30,35 @@ router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 @router.get("", response_model=List[DeviceSummary])
 def list_devices(
     db: Session = Depends(get_db),
+    container: AppContainer = Depends(get_container),
     _: User = Depends(get_current_user),
 ) -> list[DeviceSummary]:
     devices = db.query(IotDevice).order_by(IotDevice.created_at.desc()).all()
-    return [
-        DeviceSummary(
-            device_id=d.device_id,
-            machine_hash=d.device_code,
-            status={
-                "db_status": d.status.value,
-                "description": d.description or "",
-                "last_active_at": d.last_active_at.isoformat() if d.last_active_at else None,
-            },
+    now_ms = int(time.time() * 1000)
+    _ONLINE_WINDOW_MS = 120_000  # 2 minutes — device heartbeat threshold
+    result = []
+    for d in devices:
+        # Check real-time MQTT heartbeat status (in-memory, from status/{device_id} topic)
+        rt = container.command_service.get_status(d.device_code)
+        is_online = False
+        if rt:
+            received_ts = rt.get("received_ts_ms") or 0
+            payload = rt.get("payload") or {}
+            if isinstance(payload, dict) and payload.get("status") == "online":
+                if (now_ms - received_ts) < _ONLINE_WINDOW_MS:
+                    is_online = True
+        result.append(
+            DeviceSummary(
+                device_id=d.device_id,
+                machine_hash=d.device_code,
+                status={
+                    "db_status": "online" if is_online else d.status.value,
+                    "description": d.description or "",
+                    "last_active_at": d.last_active_at.isoformat() if d.last_active_at else None,
+                },
+            )
         )
-        for d in devices
-    ]
+    return result
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

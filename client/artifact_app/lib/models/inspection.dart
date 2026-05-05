@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'artifact_status.dart';
 
 enum InspectionType {
@@ -26,6 +27,7 @@ class Inspection {
   final String description;
   final String? createdBy;
   final DateTime createdAt;
+  final String? detectionsJson;
 
   Inspection({
     required this.id,
@@ -41,6 +43,7 @@ class Inspection {
     required this.description,
     this.createdBy,
     required this.createdAt,
+    this.detectionsJson,
   });
 
   factory Inspection.fromJson(Map<String, dynamic> json) {
@@ -59,6 +62,39 @@ class Inspection {
       createdBy: json['created_by'] as String?,
       createdAt:
           DateTime.tryParse(json['created_at'] as String? ?? '') ?? DateTime.now(),
+      detectionsJson: json['detections_json'] as String?,
     );
+  }
+
+  /// Path to the AI-annotated image (bounding boxes drawn by YOLO).
+  /// Parsed from the new detections_json format.
+  String? get annotatedImagePath {
+    if (detectionsJson == null || detectionsJson!.isEmpty) return null;
+    try {
+      final parsed = jsonDecode(detectionsJson!);
+      if (parsed is Map) return parsed['annotated_path'] as String?;
+    } catch (_) {}
+    return null;
+  }
+
+  /// Parse YOLO detections from detectionsJson.
+  /// Returns flat list of detection maps with class_name, confidence, bbox_xyxy.
+  List<Map<String, dynamic>> get detections {
+    if (detectionsJson == null || detectionsJson!.isEmpty) return [];
+    try {
+      final parsed = jsonDecode(detectionsJson!) as dynamic;
+      // New format: {"annotated_path": "...", "results": [...]}
+      final rawList = (parsed is Map ? parsed['results'] : parsed) as List<dynamic>? ?? [];
+      final all = <Map<String, dynamic>>[];
+      for (final item in rawList) {
+        final dets = (item as Map<String, dynamic>)['detections'] as List<dynamic>? ?? [];
+        for (final d in dets) {
+          all.add(Map<String, dynamic>.from(d as Map));
+        }
+      }
+      return all;
+    } catch (_) {
+      return [];
+    }
   }
 }

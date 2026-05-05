@@ -759,6 +759,7 @@ class MainApp:
         result = self.api_client.upload_stereo_pair(
             left_path=left_result.image_path,
             right_path=right_result.image_path,
+            artifact_id=artifact_id,
         )
         if result is None:
             print("[STEREO] Upload stereo pair that bai")
