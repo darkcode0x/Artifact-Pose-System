@@ -434,5 +434,24 @@ flutter run --dart-define=API_BASE_URL=http://192.168.x.y:8000
 
 
 
+## Trên server:
 
 docker compose logs -f server
+
+
+## Trên Pi:
+cd embed/device_agent
+PYTHONPATH=. python3 runtime/main_app.py
+
+## Show màn hình điện thoại:
+scrcpy
+
+## Trên WSL - init:
+curl -X POST http://localhost:8000/workflows/dev-bbb742d369/start-initialization \
+  -H "Content-Type: application/json" \
+  -d '{"artifact_id":"artifact_demo_001","baseline_mm":100.0,"steps_per_mm":860.0}'
+
+## Dịch vật thể:
+curl -X POST http://localhost:8000/workflows/dev-bbb742d369/start-alignment \
+  -H "Content-Type: application/json" \
+  -d '{"artifact_id":"artifact_demo_001"}'
