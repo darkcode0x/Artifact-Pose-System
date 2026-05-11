@@ -138,6 +138,25 @@ ip -4 addr show | grep -oP '(?<=inet )192\.[0-9.]+'
 
 ## Bước 3 — Thiết lập adb reverse (chỉ cho USB)
 
+Chạy trước:
+
+usbipd list
+
+Bạn sẽ thấy dạng như:
+
+BUSID  VID:PID    DEVICE
+1-4    18d1:4ee7 Android
+
+Lấy giá trị ở cột BUSID, rồi attach:
+
+usbipd bind --busid 1-4
+
+usbipd attach --wsl --busid 1-4
+
+Sau đó quay lại WSL:
+
+adb devices
+
 ```bash
 adb reverse tcp:8000 tcp:8000
 ```
@@ -413,24 +432,7 @@ flutter run --dart-define=API_BASE_URL=http://192.168.x.y:8000
 ```
 
 
-Chạy trước:
 
-usbipd list
-
-Bạn sẽ thấy dạng như:
-
-BUSID  VID:PID    DEVICE
-1-4    18d1:4ee7 Android
-
-Lấy giá trị ở cột BUSID, rồi attach:
-
-usbipd bind --busid 1-4
-
-usbipd attach --wsl --busid 1-4
-
-Sau đó quay lại WSL:
-
-adb devices
 
 
 docker compose logs -f server
