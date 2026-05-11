@@ -61,7 +61,7 @@ class _ArtifactListScreenState extends State<ArtifactListScreen> {
                 }
               },
               icon: const Icon(Icons.add),
-              label: const Text('New artifact'),
+              label: const Text('Add Artifact'),
             )
           : null,
     );
@@ -81,7 +81,7 @@ class _ArtifactListScreenState extends State<ArtifactListScreen> {
       return const EmptyStateView(
         icon: Icons.inventory_2_outlined,
         title: 'No artifacts yet',
-        subtitle: 'Tap "New artifact" to add the first one.',
+        subtitle: 'Tap "Add Artifact" to create one.',
       );
     }
     return ListView.separated(

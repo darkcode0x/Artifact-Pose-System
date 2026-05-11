@@ -147,17 +147,17 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
   Future<void> _runInitialization() async {
     final device = _effectiveDevice;
     if (device == null) {
-      setState(() => _errorMessage = 'Vui lòng chọn thiết bị trước');
+      setState(() => _errorMessage = 'Please select a device first');
       return;
     }
     final artifact = _selectedArtifact;
     if (artifact == null) {
-      setState(() => _errorMessage = 'Vui lòng chọn hiện vật trước');
+      setState(() => _errorMessage = 'Please select an artifact first');
       return;
     }
     final baselineMm = double.tryParse(_baselineController.text.trim());
     if (baselineMm == null || baselineMm <= 0) {
-      setState(() => _errorMessage = 'Baseline (mm) phải là số dương hợp lệ');
+      setState(() => _errorMessage = 'Baseline (mm) must be a positive number');
       return;
     }
 
@@ -180,7 +180,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
         _phase = ok ? _Phase.initDone : _Phase.idle;
         if (!ok) {
           _errorMessage =
-              'Khởi tạo thất bại: ${result['publish_error'] ?? 'unknown error'}';
+              'Initialization failed: ${result['publish_error'] ?? 'unknown error'}';
         }
       });
     } on ApiException catch (e) {
@@ -226,7 +226,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
         setState(() {
           _phase = _Phase.initDone;
           _errorMessage =
-              'Căn chỉnh thất bại: ${result['publish_error'] ?? 'unknown error'}';
+              'Alignment failed: ${result['publish_error'] ?? 'unknown error'}';
         });
       }
       // If ok=true, keep phase=alignRunning and keep polling.
@@ -302,7 +302,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
         title: Text(
           _effectiveDevice != null
               ? 'Workflow: ${_effectiveDevice!.deviceCode}'
-              : 'Workflow: Chọn thiết bị',
+              : 'Workflow: Select Device',
         ),
         actions: [
           if (_effectiveDevice != null)
@@ -349,7 +349,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Cấu hình quy trình',
+              'Workflow Configuration',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
             const SizedBox(height: 10),
@@ -359,7 +359,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                 value: _selectedDevice,
                 isExpanded: true,
                 decoration: const InputDecoration(
-                  hintText: 'Chọn thiết bị IoT...',
+                  hintText: 'Select IoT device...',
                   prefixIcon: Icon(Icons.router_outlined),
                 ),
                 items: _devices
@@ -389,7 +389,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
               value: _selectedArtifact,
               isExpanded: true,
               decoration: const InputDecoration(
-                hintText: 'Chọn hiện vật cần kiểm tra...',
+                hintText: 'Select artifact to inspect...',
                 prefixIcon: Icon(Icons.inventory_2_outlined),
               ),
               items: _artifacts
@@ -424,7 +424,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                     const SizedBox(width: 4),
                     const Expanded(
                       child: Text(
-                        'Đang trong quy trình — không thể thay đổi',
+                        'Workflow in progress — cannot change',
                         style: TextStyle(
                             fontSize: 11, color: AppColors.textMuted),
                       ),
@@ -470,7 +470,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
 
     return _StepCard(
       stepNumber: 1,
-      title: 'Khởi tạo Golden Pose (Stereo)',
+      title: 'Initialize Golden Pose (Stereo)',
       isDone: isDone,
       isActive: isRunning,
       child: Column(
@@ -490,10 +490,10 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                   : const Icon(Icons.play_arrow),
               label: Text(
                 isRunning
-                    ? 'Đang gửi lệnh...'
+                    ? 'Sending command...'
                     : isDone
-                        ? 'Gửi lại (reset)'
-                        : 'Bắt đầu khởi tạo',
+                        ? 'Re-send (reset)'
+                        : 'Start Initialization',
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor:
@@ -516,7 +516,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
 
     return _StepCard(
       stepNumber: 2,
-      title: 'Căn chỉnh tư thế',
+      title: 'Pose Alignment',
       isDone: isDone,
       isActive: isRunning,
       trailing: _acks.isNotEmpty
@@ -540,7 +540,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
           if (_acks.isNotEmpty) ...[
             const SizedBox(height: 12),
             const Text(
-              'Lịch sử vòng lặp (mới nhất trước):',
+              'Loop history (newest first):',
               style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
             ),
             const SizedBox(height: 6),
@@ -553,7 +553,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                 child: ElevatedButton.icon(
                   onPressed: canStart ? _runAlignment : null,
                   icon: const Icon(Icons.adjust),
-                  label: const Text('Bắt đầu căn chỉnh'),
+                  label: const Text('Start Alignment'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     foregroundColor: Colors.white,
@@ -566,7 +566,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                   child: ElevatedButton.icon(
                     onPressed: _confirmAlignmentDone,
                     icon: const Icon(Icons.check_circle_outline),
-                    label: const Text('Xác nhận xong'),
+                    label: const Text('Confirm Done'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
@@ -580,7 +580,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
             const Padding(
               padding: EdgeInsets.only(top: 8),
               child: Text(
-                'Thiết bị đang tự động căn chỉnh theo vòng lặp. Nhấn "Xác nhận xong" khi thiết bị đã đạt tư thế mong muốn.',
+                'Device is auto-aligning in a loop. Press "Confirm Done" when the desired pose is reached.',
                 style: TextStyle(fontSize: 11, color: AppColors.textMuted),
               ),
             ),
@@ -598,12 +598,12 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     final ts = tsMs != null ? DateTime.fromMillisecondsSinceEpoch(tsMs).toLocal() : null;
 
     const actionLabels = <String, String>{
-      'capture': 'Chụp ảnh',
-      'move': 'Di chuyển',
-      'alignment_complete': 'Căn chỉnh xong ✓',
-      'alignment_failed': 'Căn chỉnh thất bại ✗',
-      'capture_stereo_pair': 'Chụp stereo (Golden)',
-      'noop': 'Không làm gì',
+      'capture': 'Capture',
+      'move': 'Move',
+      'alignment_complete': 'Alignment Complete ✓',
+      'alignment_failed': 'Alignment Failed ✗',
+      'capture_stereo_pair': 'Stereo Capture (Golden)',
+      'noop': 'No-op',
     };
     final actionDisplay = actionLabels[action] ?? action;
     final statusStr = result['status']?.toString() ?? '';
@@ -672,7 +672,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
 
     return _StepCard(
       stepNumber: 3,
-      title: 'AI Kiểm tra hiện vật',
+      title: 'AI Artifact Inspection',
       isDone: isDone,
       isActive: isRunning,
       accentColor: Colors.orange,
@@ -680,7 +680,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Sử dụng ảnh căn chỉnh cuối cùng để AI phân tích và đối chiếu với ảnh tham chiếu gốc.',
+            'Uses the final aligned image to run AI analysis against the original reference.',
             style: TextStyle(fontSize: 13, color: AppColors.textMuted),
           ),
           if (_inspectionResult != null) ...[
@@ -697,7 +697,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                       ? const _SmallSpinner()
                       : const Icon(Icons.search),
                   label: Text(
-                      isRunning ? 'Đang phân tích...' : 'Gửi AI kiểm tra'),
+                      isRunning ? 'Analyzing...' : 'Run AI Inspection'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.orange,
                     foregroundColor: Colors.white,
@@ -716,7 +716,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                       ),
                     ),
                     icon: const Icon(Icons.open_in_new),
-                    label: const Text('Xem kết quả'),
+                    label: const Text('View Result'),
                   ),
                 ),
               ],
@@ -771,7 +771,7 @@ class _DeviationTile extends StatelessWidget {
               ),
               const SizedBox(width: 5),
               Text(
-                withinTol ? 'Đã căn chỉnh đúng vị trí' : 'Đang căn chỉnh...',
+                withinTol ? 'Within tolerance' : 'Aligning...',
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
@@ -782,11 +782,11 @@ class _DeviationTile extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Vị trí: Δx=$dx  Δz=$dz  (tổng: $transMag)',
+            'Position: Δx=$dx  Δz=$dz  (total: $transMag)',
             style: const TextStyle(fontSize: 11, fontFamily: 'monospace', letterSpacing: 0.3),
           ),
           Text(
-            'Góc:    Δpan=$dpan  Δtilt=$dtilt  (tổng: $rotMag)',
+            'Angle:  Δpan=$dpan  Δtilt=$dtilt  (total: $rotMag)',
             style: const TextStyle(fontSize: 11, fontFamily: 'monospace', letterSpacing: 0.3),
           ),
         ],
@@ -936,7 +936,7 @@ class _ResultChips extends StatelessWidget {
       runSpacing: 6,
       children: [
         _Chip(
-          label: ok ? 'Thành công' : 'Thất bại',
+          label: ok ? 'Success' : 'Failed',
           color: ok ? Colors.green : Colors.red,
           icon: ok ? Icons.check_circle_outline : Icons.cancel_outlined,
         ),
@@ -1028,7 +1028,7 @@ class _InspectionSummary extends StatelessWidget {
                     fontWeight: FontWeight.bold,
                     color: scoreColor),
               ),
-              const Text('Mức hư hại', style: TextStyle(fontSize: 11)),
+              const Text('Damage', style: TextStyle(fontSize: 11)),
             ],
           ),
           Column(

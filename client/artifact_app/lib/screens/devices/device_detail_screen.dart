@@ -77,23 +77,23 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   child: Column(
                     children: [
                       _infoRow(
-                        'Trạng thái',
+                        'Status',
                         _currentDevice.status.name.toUpperCase(),
                         color: _currentDevice.isOnline
                             ? Colors.green
                             : Colors.grey,
                       ),
-                      _infoRow('Mã thiết bị', _currentDevice.deviceCode),
-                      _infoRow('Mô tả',
-                          _currentDevice.description ?? 'Không có mô tả'),
-                      _infoRow('ID hệ thống', _currentDevice.deviceId),
+                      _infoRow('Device Code', _currentDevice.deviceCode),
+                      _infoRow('Description',
+                          _currentDevice.description ?? 'No description'),
+                      _infoRow('System ID', _currentDevice.deviceId),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 24),
               const Text(
-                'Hoạt động gần đây',
+                'Recent Activity',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
               ),
               const SizedBox(height: 8),
@@ -110,7 +110,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 const Padding(
                   padding: EdgeInsets.all(16),
                   child: Text(
-                    'Chưa có nhật ký hoạt động.',
+                    'No activity logs yet.',
                     style: TextStyle(color: AppColors.textMuted),
                   ),
                 ),

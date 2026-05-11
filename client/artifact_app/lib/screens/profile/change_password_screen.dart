@@ -33,21 +33,21 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
 
     if (oldPass.isEmpty || newPass.isEmpty || confirmPass.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Vui lòng điền đầy đủ các trường')),
+        const SnackBar(content: Text('Please fill in all fields')),
       );
       return;
     }
 
     if (newPass != confirmPass) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Mật khẩu mới không khớp')),
+        const SnackBar(content: Text('New passwords do not match')),
       );
       return;
     }
 
     if (newPass.length < 6) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Mật khẩu phải có ít nhất 6 ký tự')),
+        const SnackBar(content: Text('Password must be at least 6 characters')),
       );
       return;
     }
@@ -64,14 +64,14 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Đổi mật khẩu thành công')),
+          const SnackBar(content: Text('Password changed successfully')),
         );
         Navigator.pop(context);
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Lỗi: ${e.toString()}')),
+          SnackBar(content: Text('Error: ${e.toString()}')),
         );
       }
     } finally {
@@ -82,22 +82,22 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Đổi mật khẩu')),
+      appBar: AppBar(title: const Text('Change Password')),
       body: ResponsiveBody(
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Nhập mật khẩu hiện tại và mật khẩu mới để cập nhật bảo mật tài khoản của bạn.',
+              'Enter your current password and a new one to update your account security.',
               style: TextStyle(color: AppColors.textMuted),
             ),
             const SizedBox(height: 24),
-            _buildPasswordField('Mật khẩu cũ', _oldPasswordController),
+            _buildPasswordField('Current Password', _oldPasswordController),
             const SizedBox(height: 16),
-            _buildPasswordField('Mật khẩu mới', _newPasswordController),
+            _buildPasswordField('New Password', _newPasswordController),
             const SizedBox(height: 16),
-            _buildPasswordField('Xác nhận mật khẩu mới', _confirmPasswordController),
+            _buildPasswordField('Confirm New Password', _confirmPasswordController),
             const SizedBox(height: 32),
             SizedBox(
               height: 54,
@@ -106,7 +106,7 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
                 icon: _isBusy 
                   ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.lock_reset),
-                label: const Text('Cập nhật mật khẩu'),
+                label: const Text('Update Password'),
               ),
             ),
           ],

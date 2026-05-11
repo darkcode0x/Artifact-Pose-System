@@ -70,14 +70,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
       await auth.fetchFullProfile();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Thông tin cá nhân đã được cập nhật!')),
+          const SnackBar(content: Text('Profile updated successfully!')),
         );
         setState(() => _isEditing = false);
       }
     } on ApiException catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -90,7 +90,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Hồ sơ cá nhân'),
+        title: const Text('Profile'),
         actions: [
           IconButton(
             icon: Icon(_isEditing ? Icons.close : Icons.edit_outlined),
@@ -118,12 +118,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             const SizedBox(height: 32),
             
-            _sectionTitle('Thông tin chi tiết'),
+            _sectionTitle('Personal Information'),
             const SizedBox(height: 16),
-            _infoField('Họ và Tên', _nameController, Icons.badge_outlined, enabled: _isEditing),
+            _infoField('Full Name', _nameController, Icons.badge_outlined, enabled: _isEditing),
             _infoField('Email', _emailController, Icons.email_outlined, enabled: _isEditing),
-            _infoField('Số điện thoại', _phoneController, Icons.phone_android_outlined, enabled: _isEditing),
-            _infoField('Tuổi', _ageController, Icons.cake_outlined, isNumber: true, enabled: _isEditing),
+            _infoField('Phone', _phoneController, Icons.phone_android_outlined, enabled: _isEditing),
+            _infoField('Age', _ageController, Icons.cake_outlined, isNumber: true, enabled: _isEditing),
             
             if (_isEditing) ...[
               const SizedBox(height: 12),
@@ -132,7 +132,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 child: ElevatedButton.icon(
                   onPressed: _isBusy ? null : _updateProfile,
                   icon: const Icon(Icons.save),
-                  label: const Text('Lưu thay đổi'),
+                  label: const Text('Save Changes'),
                 ),
               ),
             ],
@@ -140,14 +140,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 24),
             const Divider(),
             const SizedBox(height: 24),
-            _sectionTitle('Bảo mật'),
+            _sectionTitle('Security'),
             const SizedBox(height: 16),
             Card(
               margin: EdgeInsets.zero,
               child: ListTile(
                 leading: const Icon(Icons.lock_reset, color: AppColors.primary),
-                title: const Text('Đổi mật khẩu'),
-                subtitle: const Text('Cập nhật mật khẩu định kỳ để bảo vệ tài khoản'),
+                title: const Text('Change Password'),
+                subtitle: const Text('Update your password regularly to stay secure'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () {
                   Navigator.push(
@@ -162,7 +162,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               margin: EdgeInsets.zero,
               child: ListTile(
                 leading: const Icon(Icons.logout, color: Colors.red),
-                title: const Text('Đăng xuất', style: TextStyle(color: Colors.red)),
+                title: const Text('Sign Out', style: TextStyle(color: Colors.red)),
                 onTap: () => auth.logout(),
               ),
             ),

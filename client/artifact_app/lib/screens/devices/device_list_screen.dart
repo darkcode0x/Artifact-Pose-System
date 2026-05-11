@@ -74,9 +74,9 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                     SizedBox(height: 80),
                     EmptyStateView(
                       icon: Icons.devices_other_outlined,
-                      title: 'Chưa có thiết bị nào',
+                      title: 'No devices yet',
                       subtitle:
-                          'Thiết bị sẽ tự đăng ký khi Raspberry Pi kết nối tới server.',
+                          'Devices register automatically when the Raspberry Pi connects.',
                     ),
                   ],
                 );
