@@ -138,30 +138,51 @@ ip -4 addr show | grep -oP '(?<=inet )192\.[0-9.]+'
 
 ## Bước 3 — Thiết lập adb reverse (chỉ cho USB)
 
-Chạy trước:
+### Cách tự động (khuyên dùng)
 
-usbipd list
+Mỗi lần cắm lại USB, chỉ cần chạy **một lệnh duy nhất** từ Windows PowerShell:
 
-Bạn sẽ thấy dạng như:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\attach_android_usb.ps1
+```
 
-BUSID  VID:PID    DEVICE
-1-4    18d1:4ee7 Android
+Script sẽ tự:
+1. Tìm điện thoại Android trong danh sách usbipd (theo VID hoặc tên)
+2. `usbipd bind` + `usbipd attach --wsl`
+3. Chạy `adb reverse tcp:8000 tcp:8000` trong WSL
 
-Lấy giá trị ở cột BUSID, rồi attach:
+> Lần đầu chạy sẽ hiện UAC prompt (cần Admin cho bước `bind`). Các lần sau không cần.
 
-usbipd bind --busid 1-4
-
-usbipd attach --wsl --busid 1-4
-
-Sau đó quay lại WSL:
-
-adb devices
+Hoặc nếu USB đã attach rồi, chỉ cần chạy trong WSL:
 
 ```bash
+./scripts/wsl_adb_setup.sh
+```
+
+---
+
+### Cách thủ công (nếu script không chạy được)
+
+```powershell
+# 1. Tìm BUSID của điện thoại
+usbipd list
+
+# 2. Bind (cần Admin, chỉ cần 1 lần cho mỗi thiết bị)
+usbipd bind --busid 1-4
+
+# 3. Attach vào WSL
+usbipd attach --wsl --busid 1-4
+```
+
+Sau đó trong WSL:
+```bash
+adb devices
 adb reverse tcp:8000 tcp:8000
 ```
 
-> ⚠️ **Phải chạy lại lệnh này sau mỗi lần:**
+---
+
+> ⚠️ **Phải chạy lại sau mỗi lần:**
 > - Cắm lại dây USB
 > - Khởi động lại điện thoại
 > - `adb kill-server` / `adb start-server`
@@ -415,15 +436,18 @@ flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
 
 ## Tóm tắt lệnh nhanh (chạy mỗi phiên làm việc)
 
+```powershell
+# === Windows PowerShell: attach USB + adb reverse (1 lệnh duy nhất) ===
+powershell -ExecutionPolicy Bypass -File scripts\attach_android_usb.ps1
+```
+
 ```bash
-# === Terminal 1: Khởi động server ===
+# === WSL Terminal 1: Khởi động server ===
 cd /home/thepiece/System/Artifact-Pose-System/server
 docker compose --env-file .env.docker up -d
 curl http://127.0.0.1:8000/health     # xác nhận OK
 
-# === Terminal 2: USB mode (adb reverse) ===
-adb devices                            # xác nhận điện thoại kết nối
-adb reverse tcp:8000 tcp:8000          # ← BẮT BUỘC, chạy sau mỗi lần cắm lại
+# === WSL Terminal 2: Chạy app Flutter (USB mode) ===
 cd /home/thepiece/System/Artifact-Pose-System/client/artifact_app
 flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
 
@@ -441,6 +465,7 @@ docker compose logs -f server
 
 ## Trên Pi:
 cd embed/device_agent
+
 PYTHONPATH=. python3 runtime/main_app.py
 
 ## Show màn hình điện thoại:

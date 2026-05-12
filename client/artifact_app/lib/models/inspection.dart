@@ -77,6 +77,16 @@ class Inspection {
     return null;
   }
 
+  /// Path to the SIFT-aligned image (pose-corrected against reference).
+  String? get alignedImagePath {
+    if (detectionsJson == null || detectionsJson!.isEmpty) return null;
+    try {
+      final parsed = jsonDecode(detectionsJson!);
+      if (parsed is Map) return parsed['aligned_path'] as String?;
+    } catch (_) {}
+    return null;
+  }
+
   /// Parse YOLO detections from detectionsJson.
   /// Returns flat list of detection maps with class_name, confidence, bbox_xyxy.
   List<Map<String, dynamic>> get detections {
@@ -96,5 +106,32 @@ class Inspection {
     } catch (_) {
       return [];
     }
+  }
+
+  /// SSIM summary embedded in detections_json.
+  /// Keys: ssim, ssim_gray, ssim_color, damage_pct
+  Map<String, dynamic>? get ssimSummary {
+    if (detectionsJson == null || detectionsJson!.isEmpty) return null;
+    try {
+      final parsed = jsonDecode(detectionsJson!);
+      if (parsed is Map) {
+        final s = parsed['ssim_summary'];
+        if (s is Map) return Map<String, dynamic>.from(s);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Convenience: SSIM overall score (0-1) from ssimSummary, falling back to ssimScore string.
+  double? get ssimValue {
+    final s = ssimSummary;
+    if (s != null) return (s['ssim'] as num?)?.toDouble();
+    if (ssimScore != null) return double.tryParse(ssimScore!);
+    return null;
+  }
+
+  double? get ssimDamagePct {
+    final s = ssimSummary;
+    return (s?['damage_pct'] as num?)?.toDouble();
   }
 }

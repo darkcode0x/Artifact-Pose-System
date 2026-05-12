@@ -42,14 +42,42 @@ class DeviceWorkflowScreen extends StatefulWidget {
   State<DeviceWorkflowScreen> createState() => _DeviceWorkflowScreenState();
 }
 
+// Persists alignment state across navigation pushes/pops.
+class _PersistedWorkflowState {
+  final _Phase phase;
+  final List<Map<String, dynamic>> acks;
+  final Map<String, dynamic>? latestDeviation;
+  final Map<String, dynamic>? initResult;
+  final Map<String, dynamic>? alignResult;
+  final Inspection? inspectionResult;
+  final String? selectedArtifactId;
+  final int? alignmentStartTs;
+
+  const _PersistedWorkflowState({
+    required this.phase,
+    required this.acks,
+    this.latestDeviation,
+    this.initResult,
+    this.alignResult,
+    this.inspectionResult,
+    this.selectedArtifactId,
+    this.alignmentStartTs,
+  });
+}
+
 class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
+  // Static cache so state survives navigation away and back.
+  static final Map<String, _PersistedWorkflowState> _stateCache = {};
+
   late WorkflowService _workflowService;
   late ArtifactService _artifactService;
   late DeviceService _deviceService;
 
   List<Artifact> _artifacts = [];
   Artifact? _selectedArtifact;
-  final _baselineController = TextEditingController(text: '100');
+
+  // Baseline is always 100 mm — not editable by user.
+  static const double _baselineMm = 100.0;
 
   // Device selection (used when widget.device is null)
   List<IotDevice> _devices = [];
@@ -60,13 +88,24 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
 
   Map<String, dynamic>? _initResult;
   Map<String, dynamic>? _alignResult;
+  // ACKs for the *current* alignment session only (cleared on new start).
   List<Map<String, dynamic>> _acks = [];
+  int? _alignmentStartTs;
   Map<String, dynamic>? _latestDeviation;
   Timer? _pollTimer;
 
   Inspection? _inspectionResult;
 
+  // ID of cached selected artifact — resolved after fresh artifact list is loaded.
+  String? _restoredArtifactId;
+
   IotDevice? get _effectiveDevice => widget.device ?? _selectedDevice;
+
+  // True when at least one alignment_complete ACK has been received this session.
+  bool get _alignmentCompletedThisSession =>
+      _acks.any((ack) =>
+          (ack['payload'] as Map<String, dynamic>?)?['action'] ==
+          'alignment_complete');
 
   @override
   void initState() {
@@ -77,12 +116,47 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     _deviceService = DeviceService(api);
     _loadArtifacts();
     if (widget.device == null) _loadDevices();
+    _restoreState();
+  }
+
+  void _restoreState() {
+    final key = widget.device?.deviceCode ?? '';
+    if (key.isEmpty) return;
+    final cached = _stateCache[key];
+    if (cached == null) return;
+    _phase = cached.phase;
+    _acks = List.of(cached.acks);
+    _latestDeviation = cached.latestDeviation;
+    _initResult = cached.initResult;
+    _alignResult = cached.alignResult;
+    _inspectionResult = cached.inspectionResult;
+    _alignmentStartTs = cached.alignmentStartTs;
+    _restoredArtifactId = cached.selectedArtifactId;
+    // selectedArtifact will be resolved once _loadArtifacts() completes.
+    if (_phase == _Phase.alignRunning) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _startPoll());
+    }
+  }
+
+  void _persistState() {
+    final key = _effectiveDevice?.deviceCode ?? '';
+    if (key.isEmpty) return;
+    _stateCache[key] = _PersistedWorkflowState(
+      phase: _phase,
+      acks: List.of(_acks),
+      latestDeviation: _latestDeviation,
+      initResult: _initResult,
+      alignResult: _alignResult,
+      inspectionResult: _inspectionResult,
+      selectedArtifactId: _selectedArtifact?.id,
+      alignmentStartTs: _alignmentStartTs,
+    );
   }
 
   @override
   void dispose() {
+    _persistState();
     _pollTimer?.cancel();
-    _baselineController.dispose();
     super.dispose();
   }
 
@@ -100,13 +174,14 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       if (!mounted) return;
       setState(() {
         _artifacts = list;
-        if (widget.preselectedArtifactId != null) {
+        // Restore cached selection or use preselected artifact id.
+        final targetId = _restoredArtifactId ?? widget.preselectedArtifactId;
+        if (targetId != null) {
           try {
-            _selectedArtifact = list.firstWhere(
-              (a) => a.id == widget.preselectedArtifactId,
-            );
+            _selectedArtifact = list.firstWhere((a) => a.id == targetId);
           } catch (_) {}
         }
+        _restoredArtifactId = null;
       });
     } catch (_) {
       // silent fail — user will see empty dropdown
@@ -155,12 +230,6 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       setState(() => _errorMessage = 'Please select an artifact first');
       return;
     }
-    final baselineMm = double.tryParse(_baselineController.text.trim());
-    if (baselineMm == null || baselineMm <= 0) {
-      setState(() => _errorMessage = 'Baseline (mm) must be a positive number');
-      return;
-    }
-
     setState(() {
       _phase = _Phase.initRunning;
       _errorMessage = null;
@@ -171,7 +240,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       final result = await _workflowService.startInitialization(
         deviceId: _effectiveDevice!.deviceCode,
         artifactId: artifact.id,
-        baselineMm: baselineMm,
+        baselineMm: _baselineMm,
       );
       if (!mounted) return;
       final ok = result['ok'] == true;
@@ -208,7 +277,8 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       _phase = _Phase.alignRunning;
       _errorMessage = null;
       _alignResult = null;
-      _acks = [];
+      _acks = [];  // Clear ACKs for the new alignment session.
+      _alignmentStartTs = DateTime.now().millisecondsSinceEpoch;
     });
     _startPoll();
 
@@ -401,19 +471,6 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
               onChanged:
                   locked ? null : (v) => setState(() => _selectedArtifact = v),
             ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _baselineController,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              enabled: !locked,
-              decoration: const InputDecoration(
-                labelText: 'Baseline (mm)',
-                prefixIcon: Icon(Icons.straighten),
-                hintText: '100',
-                suffixText: 'mm',
-              ),
-            ),
             if (locked)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -560,11 +617,14 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                   ),
                 ),
               ),
-              if (isRunning) ...[
+              if (isRunning || isDone) ...[
                 const SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: _confirmAlignmentDone,
+                    // Enable only after at least one alignment_complete ACK.
+                    onPressed: (isRunning && _alignmentCompletedThisSession)
+                        ? _confirmAlignmentDone
+                        : null,
                     icon: const Icon(Icons.check_circle_outline),
                     label: const Text('Confirm Done'),
                     style: ElevatedButton.styleFrom(
@@ -577,11 +637,13 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
             ],
           ),
           if (isRunning)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
               child: Text(
-                'Device is auto-aligning in a loop. Press "Confirm Done" when the desired pose is reached.',
-                style: TextStyle(fontSize: 11, color: AppColors.textMuted),
+                _alignmentCompletedThisSession
+                    ? 'Alignment complete \u2014 press "Confirm Done" to proceed.'
+                    : 'Device is auto-aligning in a loop. "Confirm Done" will be enabled once alignment succeeds.',
+                style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
               ),
             ),
         ],
@@ -1001,62 +1063,49 @@ class _InspectionSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final score = inspection.damageScore;
-    Color scoreColor = Colors.green;
-    if (score > 35) {
-      scoreColor = Colors.red;
-    } else if (score > 15) {
-      scoreColor = Colors.orange;
-    }
+    final hasAlert = inspection.status.isAlert;
+    final Color borderColor = hasAlert ? Colors.orange : Colors.green;
 
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: scoreColor.withOpacity(0.08),
+        color: borderColor.withOpacity(0.08),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: scoreColor.withOpacity(0.3)),
+        border: Border.all(color: borderColor.withOpacity(0.3)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
           Column(
             children: [
-              Text(
-                '$score%',
-                style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: scoreColor),
+              Icon(
+                inspection.status == ArtifactStatus.good
+                    ? Icons.check_circle
+                    : Icons.warning_amber,
+                size: 32,
+                color: inspection.status.isAlert ? Colors.orange : Colors.green,
               ),
-              const Text('Damage', style: TextStyle(fontSize: 11)),
+              Text(
+                inspection.status.label,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+              ),
             ],
           ),
           Column(
             children: [
               Icon(
-                inspection.status == ArtifactStatus.good
-                    ? Icons.check_circle
-                    : Icons.warning_amber,
+                inspection.detections.isEmpty
+                    ? Icons.verified_outlined
+                    : Icons.bug_report_outlined,
                 size: 28,
-                color: inspection.status.isAlert ? Colors.orange : Colors.green,
+                color: inspection.detections.isEmpty ? Colors.green : Colors.orange,
               ),
               Text(
-                inspection.status.label,
+                '${inspection.detections.length} region(s)',
                 style: const TextStyle(fontSize: 11),
               ),
             ],
           ),
-          if (inspection.ssimScore != null)
-            Column(
-              children: [
-                Text(
-                  inspection.ssimScore!,
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const Text('SSIM', style: TextStyle(fontSize: 11)),
-              ],
-            ),
         ],
       ),
     );
