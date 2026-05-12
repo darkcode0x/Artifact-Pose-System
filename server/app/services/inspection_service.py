@@ -524,11 +524,25 @@ class InspectionService:
                 # Pose needs correction — dispatch a move command
                 motor_cmd = pose_result.get("motor_command")
                 if motor_cmd and device_id:
+                    # C++ tra ve: move_x (steps, co dau), move_z (steps, co dau),
+                    # rotate_pan (do), rotate_tilt (do).
+                    # Pi doc: x_steps (duong), x_dir (+1/-1), z_steps (duong), z_dir,
+                    # yaw_delta (do), pitch_delta (do).
+                    # Can chuyen ten field de tranh Pi nhan lenh nhung khong di chuyen gi.
+                    raw_move_x   = float(motor_cmd.get("move_x",      0))
+                    raw_move_z   = float(motor_cmd.get("move_z",      0))
+                    raw_pan      = float(motor_cmd.get("rotate_pan",  0))
+                    raw_tilt     = float(motor_cmd.get("rotate_tilt", 0))
                     mc_payload: dict[str, Any] = {
                         "action": "move",
                         "task_id": self._command_service.build_task_id(),
                         "artifact_id": artifact_id,
-                        **motor_cmd,
+                        "x_steps": abs(int(round(raw_move_x))),
+                        "x_dir":   1 if raw_move_x >= 0 else -1,
+                        "z_steps": abs(int(round(raw_move_z))),
+                        "z_dir":   1 if raw_move_z >= 0 else -1,
+                        "yaw_delta":   raw_pan,
+                        "pitch_delta": raw_tilt,
                         "workflow": workflow,
                     }
                     published, result_info = self._mqtt_bridge.publish_command(device_id, mc_payload)

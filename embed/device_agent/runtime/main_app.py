@@ -477,15 +477,41 @@ class MainApp:
                 return {"status": "ok", "action": action}
 
             if action == "alignment_complete":
-                deviation = command.get("deviation", {})
-                print(f"[APP] === ALIGNMENT COMPLETE === artifact={command.get('artifact_id')} deviation={deviation}")
+                deviation = command.get("deviation") or {}
+                artifact_id_ac = command.get("artifact_id", "?")
+                dx  = float(deviation.get("delta_x", 0)) * 1000
+                dy  = float(deviation.get("delta_y", 0)) * 1000
+                dz  = float(deviation.get("delta_z", 0)) * 1000
+                tr  = float(deviation.get("translation_mag", 0)) * 1000
+                dp  = float(deviation.get("delta_pan",  0))
+                dt  = float(deviation.get("delta_tilt", 0))
+                dr  = float(deviation.get("delta_roll", 0))
+                rm  = float(deviation.get("rotation_mag", 0))
+                motor_cmd = deviation.get("motor_command") or {}
+                mc_x = int(motor_cmd.get("x_steps", 0))
+                mc_z = int(motor_cmd.get("z_steps", 0))
+                mc_pan  = float(motor_cmd.get("yaw_delta",   motor_cmd.get("rotate_pan",  0)))
+                mc_tilt = float(motor_cmd.get("pitch_delta", motor_cmd.get("rotate_tilt", 0)))
+                print(f"[ALIGNMENT OK] ==============================")
+                print(f"[ALIGNMENT OK]  Artifact             : {artifact_id_ac}")
+                print(f"[ALIGNMENT OK]  Sai so vi tri (pose) : X={dx:+.1f}mm  Y={dy:+.1f}mm  Z={dz:+.1f}mm  (tong {tr:.2f}mm)")
+                print(f"[ALIGNMENT OK]  Sai so goc (pose)    : Pan={dp:+.2f}°  Tilt={dt:+.2f}°  Roll={dr:+.2f}°  (tong {rm:.2f}°)")
+                print(f"[ALIGNMENT OK]  Sai so slider (buoc) : X={mc_x:+d} buoc  Z={mc_z:+d} buoc  (con lai sau chinh)")
+                print(f"[ALIGNMENT OK]  Sai so servo (do)    : Pan={mc_pan:+.2f}°  Tilt={mc_tilt:+.2f}°  (con lai sau chinh)")
+                print(f"[ALIGNMENT OK]  Servo hien tai        : Yaw={self.hardware.current_yaw}°  Pitch={self.hardware.current_pitch}°")
+                print(f"[ALIGNMENT OK] ==============================")
                 self._mark_processed_task(task_id)
-                return {"status": "ok", "action": action, "artifact_id": command.get("artifact_id")}
+                return {"status": "ok", "action": action, "artifact_id": artifact_id_ac}
 
             if action == "alignment_failed":
                 reason = command.get("reason", "unknown")
-                iteration = command.get("iteration")
-                print(f"[APP] === ALIGNMENT FAILED === artifact={command.get('artifact_id')} reason={reason} iteration={iteration}")
+                iteration = command.get("iteration", "?")
+                print(f"[ALIGNMENT FAIL] ==============================")
+                print(f"[ALIGNMENT FAIL]  Artifact  : {command.get('artifact_id', '?')}")
+                print(f"[ALIGNMENT FAIL]  Ly do     : {reason}")
+                print(f"[ALIGNMENT FAIL]  Iteration : {iteration}")
+                print(f"[ALIGNMENT FAIL]  Servo     : Yaw={self.hardware.current_yaw}°  Pitch={self.hardware.current_pitch}°")
+                print(f"[ALIGNMENT FAIL] ==============================")
                 self._mark_processed_task(task_id)
                 return {"status": "ok", "action": action, "reason": reason}
 
@@ -582,6 +608,22 @@ class MainApp:
                     if delta != 0:
                         z_dir = 1 if delta > 0 else -1
 
+        yaw_delta_applied   = yaw_target   - self.hardware.current_yaw
+        pitch_delta_applied = pitch_target - self.hardware.current_pitch
+        x_steps_before = self.hardware.current_x_steps
+        z_steps_before = self.hardware.current_z_steps
+        print(f"[MOVE] --- Bat dau lenh di chuyen ---")
+        print(f"[MOVE]  Pan (Yaw)  : {self.hardware.current_yaw:>3}° + ({yaw_delta_applied:+.1f}°) -> {yaw_target:.1f}°")
+        print(f"[MOVE]  Tilt(Pitch): {self.hardware.current_pitch:>3}° + ({pitch_delta_applied:+.1f}°) -> {pitch_target:.1f}°")
+        if x_steps > 0:
+            x_dir_str = "FORWARD(+)" if x_dir >= 0 else "BACKWARD(-)"
+            print(f"[MOVE]  Slider X   : {x_dir_str} {x_steps} buoc  (tich luy truoc khi chay: {x_steps_before} buoc)")
+        if z_steps > 0:
+            z_dir_str = "UP(+)" if z_dir >= 0 else "DOWN(-)"
+            print(f"[MOVE]  Slider Z   : {z_dir_str} {z_steps} buoc  (tich luy truoc khi chay: {z_steps_before} buoc)")
+        if x_steps == 0 and z_steps == 0 and abs(yaw_delta_applied) < 0.05 and abs(pitch_delta_applied) < 0.05:
+            print(f"[MOVE]  (Khong co di chuyen nao dang ke)")
+
         self._run_parallel_motion(
             yaw_target=yaw_target,
             pitch_target=pitch_target,
@@ -589,6 +631,10 @@ class MainApp:
             z_steps=z_steps,
             x_dir=1 if x_dir >= 0 else -1,
             z_dir=1 if z_dir >= 0 else -1,
+        )
+        print(
+            f"[MOVE] Hoan thanh -> Servo: Yaw={self.hardware.current_yaw}° Pitch={self.hardware.current_pitch}° | "
+            f"Slider (odo tu khoi dong): X={self.hardware.current_x_steps} Z={self.hardware.current_z_steps} buoc"
         )
 
         capture_after_move = command.get("capture_after_move")
@@ -654,6 +700,9 @@ class MainApp:
             "basename": basename,
             "workflow": move_command.get("workflow", {}),
             "server_command": move_command,
+            # Danh dau day la capture noi bo sau khi di chuyen.
+            # _handle_capture se biet khong can ve home vi servo vua duoc chinh chinh xac.
+            "_internal_after_move": True,
         }
 
         for key in (
@@ -724,6 +773,11 @@ class MainApp:
         lens_position = float(command.get("lens_position", self.config.lens_position))
         ts = time.time_ns()
 
+        # 0) Dua servo ve home truoc khi chup de dam bao golden pose lay dung goc chuan.
+        print(f"[STEREO] Dua servo ve home truoc khi chup golden pose (Yaw={self.hardware.HOME_YAW}° Pitch={self.hardware.HOME_PITCH}°)")
+        self.hardware.go_home()
+        time.sleep(0.5)  # Cho servo on dinh truoc khi chup
+
         # 1) Chup anh LEFT tai vi tri hien tai
         print(f"[STEREO] Chup anh LEFT, artifact={artifact_id}")
         left_result = self.camera.capture_simple(
@@ -774,12 +828,25 @@ class MainApp:
 
         lens_position = float(command.get("lens_position", self.config.lens_position))
 
+        # Neu la lan chup dau tien/retry tu server (khong phai auto-capture sau move noi bo),
+        # dua servo ve home truoc de bat dau can chinh tu goc chuan nhat quan.
+        is_internal_after_move = bool(command.get("_internal_after_move", False))
+        if not is_internal_after_move:
+            print(f"[CAPTURE] Dua servo ve home truoc khi bat dau capture (Yaw={self.hardware.HOME_YAW}° Pitch={self.hardware.HOME_PITCH}°)")
+            self.hardware.go_home()
+            time.sleep(0.5)  # Cho servo on dinh truoc khi chup
+
+        print(f"[CAPTURE] Chup anh - job={capture_job}  artifact={artifact_id}")
+        print(f"[CAPTURE] Servo hien tai                 : Yaw={self.hardware.current_yaw}°  Pitch={self.hardware.current_pitch}°")
+        print(f"[CAPTURE] Slider (tich luy tu khoi dong): X={self.hardware.current_x_steps}  Z={self.hardware.current_z_steps} buoc")
+        print(f"[CAPTURE] Lens position                 : {lens_position}")
+
         capture_outcome = self.camera.capture_simple(
             basename=basename,
             lens_position=lens_position,
         )
         if capture_outcome is None:
-            print("[APP] Capture that bai theo lenh server")
+            print(f"[CAPTURE] THAT BAI - khong the chup anh (job={capture_job}, artifact={artifact_id})")
             return
 
         capture_name_type = "reference_sample" if capture_job == "golden_sample" else "alignment_image"
@@ -800,6 +867,7 @@ class MainApp:
             "server_command": command,
         }
 
+        print(f"[CAPTURE] Da chup xong - dang upload len server...")
         uploaded = self.api_client.upload_inspection(
             image_path=capture_outcome.image_path,
             device_id=self.config.device_id,
@@ -807,7 +875,9 @@ class MainApp:
             calibration_data=metadata,
         )
         if not uploaded:
-            print("[APP] Upload inspection that bai")
+            print(f"[CAPTURE] UPLOAD THAT BAI - job={capture_job}  artifact={artifact_id}")
+        else:
+            print(f"[CAPTURE] Upload thanh cong - job={capture_job}  artifact={artifact_id}  file={capture_outcome.image_path.name if hasattr(capture_outcome.image_path, 'name') else capture_outcome.image_path}")
 
     def run(self) -> None:
         """Main loop: ket noi MQTT va tu dong reconnect khi co su co mang/server."""

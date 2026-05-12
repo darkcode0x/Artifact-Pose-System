@@ -34,6 +34,10 @@ class SliderConfig:
 class HardwareController:
     """Controller tong hop cho servo pan-tilt va slider X/Z."""
 
+    # Vi tri home mac dinh cua servo (do). Dung lam diem chuan truoc khi chup anh.
+    HOME_YAW: int = 110
+    HOME_PITCH: int = 50
+
     def __init__(
         self,
         servo_config: Optional[ServoConfig] = None,
@@ -42,8 +46,8 @@ class HardwareController:
         self.servo_config = servo_config or ServoConfig()
         self.slider_config = slider_config or SliderConfig()
 
-        self.current_yaw: int = 110
-        self.current_pitch: int = 50
+        self.current_yaw: int = self.HOME_YAW
+        self.current_pitch: int = self.HOME_PITCH
         self.current_x_steps: int = 0
         self.current_z_steps: int = 0
 
@@ -52,6 +56,11 @@ class HardwareController:
 
         self._init_servo_driver()
         self._init_stepper_driver()
+
+        # Gui lenh vat ly ngay khi khoi dong de dong bo trang thai RAM voi phan cung.
+        # Servo co the o bat ky vi tri nao sau khi Pi restart.
+        print(f"[HW] Khoi dong: dua servo ve home (Yaw={self.HOME_YAW}° Pitch={self.HOME_PITCH}°)")
+        self.go_home()
 
     def _init_servo_driver(self) -> None:
         """Khoi tao PCA9685 qua ServoKit."""
@@ -91,10 +100,23 @@ class HardwareController:
         try:
             pan_target = int(round(yaw_deg))
             pan_target = max(self.servo_config.pan_min, min(self.servo_config.pan_max, pan_target))
-            print(f"pan_target: {pan_target}")
             tilt_target = int(round(pitch_deg))
             tilt_target = max(self.servo_config.tilt_min, min(self.servo_config.tilt_max, tilt_target))
-            print(f"tilt_target: {tilt_target}")
+
+            pan_clamped  = pan_target  != int(round(yaw_deg))
+            tilt_clamped = tilt_target != int(round(pitch_deg))
+            clamp_note = ""
+            if pan_clamped:
+                clamp_note += f" [Pan clamp: yeu cau {int(round(yaw_deg))}°]"
+            if tilt_clamped:
+                clamp_note += f" [Tilt clamp: yeu cau {int(round(pitch_deg))}°]"
+
+            print(
+                f"[SERVO] Pan : {self.current_yaw:>3}° -> {pan_target:>3}°  |"
+                f"  Tilt: {self.current_pitch:>3}° -> {tilt_target:>3}°"
+                + clamp_note
+            )
+
             self._kit.servo[self.servo_config.pan_channel].angle = pan_target
             self._kit.servo[self.servo_config.tilt_channel].angle = tilt_target
             self.current_yaw = pan_target
@@ -146,9 +168,14 @@ class HardwareController:
         )
         self.current_z_steps += steps if direction > 0 else -steps
 
+    def go_home(self) -> None:
+        """Dua servo ve vi tri home (HOME_YAW, HOME_PITCH). Khong anh huong slider."""
+        self.set_pan_tilt(float(self.HOME_YAW), float(self.HOME_PITCH))
+
     def reset_position(self) -> None:
-        """Dua camera va slider ve moc mac dinh (0 do, 0 buoc)."""
-        self.set_pan_tilt(0.0, 0.0)
+        """Dua servo ve home va slider ve vi tri luc khoi dong."""
+        print(f"[HW] reset_position: servo -> home ({self.HOME_YAW}°, {self.HOME_PITCH}°), slider -> vi tri khoi dong")
+        self.go_home()
 
         if self.current_x_steps != 0:
             direction_x = -1 if self.current_x_steps > 0 else 1
