@@ -218,6 +218,6 @@ Write-Host "║   XONG! Tunnel đang hoạt động.         ║" -ForegroundCol
 Write-Host "╚════════════════════════════════════════╝" -ForegroundColor Green
 Write-Host "  http://127.0.0.1:$Port trên điện thoại → PC:$Port" -ForegroundColor White
 Write-Host ""
-Write-Host "  Lệnh kiểm tra (trong WSL): adb reverse --list" -ForegroundColor DarkGray
+Write-Host "  Check in WSL: adb reverse --list" -ForegroundColor DarkGray
 
 Pause-IfNeeded

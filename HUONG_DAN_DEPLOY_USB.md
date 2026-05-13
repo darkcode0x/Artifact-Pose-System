@@ -143,6 +143,8 @@ ip -4 addr show | grep -oP '(?<=inet )192\.[0-9.]+'
 Mỗi lần cắm lại USB, chỉ cần chạy **một lệnh duy nhất** từ Windows PowerShell:
 
 ```powershell
+cd \\wsl.localhost\Ubuntu-22.04\home\thepiece\System\Artifact-Pose-System
+
 powershell -ExecutionPolicy Bypass -File scripts\attach_android_usb.ps1
 ```
 
