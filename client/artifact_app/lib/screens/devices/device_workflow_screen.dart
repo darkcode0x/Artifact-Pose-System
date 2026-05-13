@@ -144,7 +144,17 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     if (key.isEmpty) return;
     final cached = _stateCache[key];
     if (cached == null) return;
-    _phase = cached.phase;
+    // Don't restore a fully completed session — start fresh so the user
+    // sees the golden-pose check and can begin a new workflow.
+    if (cached.phase == _Phase.done) {
+      _stateCache.remove(key);
+      return;
+    }
+    // inspectRunning means the app was killed mid-inspection — outcome unknown;
+    // roll back to alignDone so the user can re-inspect.
+    _phase = cached.phase == _Phase.inspectRunning
+        ? _Phase.alignDone
+        : cached.phase;
     _acks = List.of(cached.acks);
     _latestDeviation = cached.latestDeviation;
     _initResult = cached.initResult;
@@ -663,9 +673,11 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     final isDone = _phase.index >= _Phase.initDone.index;
     final isRunning = _phase == _Phase.initRunning;
     final canStart = _phase == _Phase.idle;
-    // Artifact already has a golden pose — offer two choices.
-    // _hasGoldenPose duoc check tu server API /pose/golden-pose/{id}/status.
-    final hasExistingGolden = canStart && _hasGoldenPose;
+    // Hien thi banner "Golden Pose da co" khi:
+    // - phase == idle (chua bat dau session moi) VA golden pose ton tai, HOAC
+    // - phase == initDone nhung init duoc skip (skipInitialization)
+    // Dung de offer: Re-initialize | Start Alignment.
+    final hasExistingGolden = _hasGoldenPose && canStart;
 
     return _StepCard(
       stepNumber: 1,

@@ -12,7 +12,7 @@ class WorkflowService {
     required String jobType,
   }) async {
     final response = await _api.post(
-      '/api/v1/workflows/$deviceId/capture-request',
+      '/workflows/$deviceId/capture-request',
       body: {
         'artifact_id': artifactId,
         'job_type': jobType,
@@ -23,7 +23,7 @@ class WorkflowService {
   }
 
   Future<Map<String, dynamic>> getLatestMetadata(String deviceId) async {
-    final response = await _api.get('/api/v1/workflows/$deviceId/latest-capture-metadata');
+    final response = await _api.get('/workflows/$deviceId/latest-capture-metadata');
     return response as Map<String, dynamic>;
   }
 
@@ -85,7 +85,7 @@ class WorkflowService {
   /// Kiem tra artifact da khoi tao golden pose chua.
   Future<bool> hasGoldenPose(String artifactId) async {
     try {
-      final body = await _api.get('/api/v1/pose/golden-pose/$artifactId/status');
+      final body = await _api.get('/pose/golden-pose/$artifactId/status');
       if (body is Map<String, dynamic>) {
         return body['has_golden_pose'] == true;
       }
