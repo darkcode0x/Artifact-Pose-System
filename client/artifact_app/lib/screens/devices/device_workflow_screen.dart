@@ -51,6 +51,7 @@ class _PersistedWorkflowState {
   final Map<String, dynamic>? alignResult;
   final Inspection? inspectionResult;
   final String? selectedArtifactId;
+  final String? selectedDeviceCode;
   final int? alignmentStartTs;
 
   const _PersistedWorkflowState({
@@ -61,6 +62,7 @@ class _PersistedWorkflowState {
     this.alignResult,
     this.inspectionResult,
     this.selectedArtifactId,
+    this.selectedDeviceCode,
     this.alignmentStartTs,
   });
 }
@@ -96,10 +98,22 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
 
   Inspection? _inspectionResult;
 
-  // ID of cached selected artifact — resolved after fresh artifact list is loaded.
+  // Golden pose status per artifact — loaded from server.
+  bool _hasGoldenPose = false;
+
+  // Trang thai online/offline moi nhat tu server (override widget.device.isOnline).
+  // null = chua check lan nao, true/false = ket qua API moi nhat.
+  bool? _liveDeviceOnline;
+
+  // ID of cached selected artifact/device — resolved after fresh list is loaded.
   String? _restoredArtifactId;
+  String? _restoredDeviceCode;
 
   IotDevice? get _effectiveDevice => widget.device ?? _selectedDevice;
+
+  // Trang thai online hien thi: dung _liveDeviceOnline neu co, fallback ve model.
+  bool get _isDeviceOnline =>
+      _liveDeviceOnline ?? (_effectiveDevice?.isOnline ?? false);
 
   // True when at least one alignment_complete ACK has been received this session.
   bool get _alignmentCompletedThisSession =>
@@ -117,10 +131,16 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     _loadArtifacts();
     if (widget.device == null) _loadDevices();
     _restoreState();
+    // Check trang thai thiet bi ngay khi mo man hinh
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _refreshDeviceOnlineStatus(),
+    );
   }
 
   void _restoreState() {
-    final key = widget.device?.deviceCode ?? '';
+    // Use a stable key: artifact ID when opened from artifact detail,
+    // device code when opened from device list.
+    final key = widget.preselectedArtifactId ?? widget.device?.deviceCode ?? '';
     if (key.isEmpty) return;
     final cached = _stateCache[key];
     if (cached == null) return;
@@ -132,14 +152,17 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     _inspectionResult = cached.inspectionResult;
     _alignmentStartTs = cached.alignmentStartTs;
     _restoredArtifactId = cached.selectedArtifactId;
-    // selectedArtifact will be resolved once _loadArtifacts() completes.
-    if (_phase == _Phase.alignRunning) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _startPoll());
+    _restoredDeviceCode = cached.selectedDeviceCode;
+    // selectedArtifact / selectedDevice resolved once load completes.
+    if (_phase == _Phase.initRunning) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _startInitPoll());
+    } else if (_phase == _Phase.alignRunning) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _startAlignPoll());
     }
   }
 
   void _persistState() {
-    final key = _effectiveDevice?.deviceCode ?? '';
+    final key = widget.preselectedArtifactId ?? _effectiveDevice?.deviceCode ?? '';
     if (key.isEmpty) return;
     _stateCache[key] = _PersistedWorkflowState(
       phase: _phase,
@@ -149,6 +172,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       alignResult: _alignResult,
       inspectionResult: _inspectionResult,
       selectedArtifactId: _selectedArtifact?.id,
+      selectedDeviceCode: _selectedDevice?.deviceCode,
       alignmentStartTs: _alignmentStartTs,
     );
   }
@@ -164,7 +188,17 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     try {
       final list = await _deviceService.list();
       if (!mounted) return;
-      setState(() => _devices = list);
+      setState(() {
+        _devices = list;
+        if (_restoredDeviceCode != null) {
+          try {
+            _selectedDevice = list.firstWhere(
+              (d) => d.deviceCode == _restoredDeviceCode,
+            );
+          } catch (_) {}
+          _restoredDeviceCode = null;
+        }
+      });
     } catch (_) {}
   }
 
@@ -183,17 +217,89 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
         }
         _restoredArtifactId = null;
       });
+      // Sau khi load xong, check golden pose cho artifact dang chon.
+      if (_selectedArtifact != null) {
+        await _checkGoldenPose(_selectedArtifact!.id);
+      }
     } catch (_) {
       // silent fail — user will see empty dropdown
     }
   }
 
-  void _startPoll() {
+  Future<void> _checkGoldenPose(String artifactId) async {
+    final has = await _workflowService.hasGoldenPose(artifactId);
+    if (!mounted) return;
+    setState(() => _hasGoldenPose = has);
+  }
+
+  Future<void> _refreshDeviceOnlineStatus() async {
+    final deviceCode = _effectiveDevice?.deviceCode;
+    if (deviceCode == null) return;
+    try {
+      final fresh = await _deviceService.getStatus(deviceCode);
+      if (!mounted) return;
+      setState(() => _liveDeviceOnline = fresh.isOnline);
+    } catch (_) {
+      // Neu API loi, giu nguyen trang thai cu
+    }
+  }
+
+  // Timestamp khi bat dau init — dung de chi chap nhan ACK moi hon
+  int? _initStartTs;
+
+  void _startInitPoll() {
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       if (!mounted) return;
       final deviceId = _effectiveDevice?.deviceCode;
       if (deviceId == null) return;
+
+      try {
+        final acks = await _workflowService.pollAcks(deviceId, limit: 20);
+        if (!mounted) return;
+
+        // Tim ACK capture_stereo_pair ok moi hon thoi diem bat dau init
+        final startTs = _initStartTs ?? 0;
+        final completed = acks.any((ack) {
+          final ts = (ack['received_ts_ms'] as int?) ??
+              ((ack['payload'] as Map?))?['ts_ms'] as int? ??
+              0;
+          if (ts < startTs) return false;
+          final payload = ack['payload'] as Map<String, dynamic>? ?? {};
+          final action = payload['action']?.toString();
+          final result = payload['result'] as Map<String, dynamic>? ?? {};
+          return action == 'capture_stereo_pair' && result['status'] == 'ok';
+        });
+
+        if (completed) {
+          _stopPoll();
+          // Refresh artifact de cap nhat has_image
+          final artifactId = _selectedArtifact?.id;
+          if (artifactId != null) {
+            try {
+              final refreshed = await _artifactService.get(artifactId);
+              if (mounted) setState(() => _selectedArtifact = refreshed);
+            } catch (_) {}
+            // Refresh golden pose status sau khi init xong.
+            await _checkGoldenPose(artifactId);
+          }
+          if (mounted) {
+            setState(() => _phase = _Phase.initDone);
+          }
+        }
+      } catch (_) {}
+    });
+  }
+
+  void _startAlignPoll() {
+    _pollTimer?.cancel();
+    var _pollCount = 0;
+    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      if (!mounted) return;
+      final deviceId = _effectiveDevice?.deviceCode;
+      if (deviceId == null) return;
+
+      _pollCount++;
 
       // Poll ACKs
       try {
@@ -211,12 +317,19 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
           setState(() => _latestDeviation = deviation);
         }
       } catch (_) {}
+
+      // Refresh trang thai online moi 10 poll (~30s)
+      if (_pollCount % 10 == 0) {
+        _refreshDeviceOnlineStatus();
+      }
     });
   }
 
   void _stopPoll() {
     _pollTimer?.cancel();
     _pollTimer = null;
+    // Refresh trang thai thiet bi khi dung poll
+    _refreshDeviceOnlineStatus();
   }
 
   Future<void> _runInitialization() async {
@@ -234,6 +347,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       _phase = _Phase.initRunning;
       _errorMessage = null;
       _initResult = null;
+      _initStartTs = DateTime.now().millisecondsSinceEpoch;
     });
 
     try {
@@ -244,14 +358,17 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       );
       if (!mounted) return;
       final ok = result['ok'] == true;
-      setState(() {
-        _initResult = result;
-        _phase = ok ? _Phase.initDone : _Phase.idle;
-        if (!ok) {
+      setState(() => _initResult = result);
+      if (ok) {
+        // Lenh da duoc gui den thiet bi — cho den khi nhan ACK capture_stereo_pair ok
+        _startInitPoll();
+      } else {
+        setState(() {
+          _phase = _Phase.idle;
           _errorMessage =
               'Initialization failed: ${result['publish_error'] ?? 'unknown error'}';
-        }
-      });
+        });
+      }
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -280,7 +397,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       _acks = [];  // Clear ACKs for the new alignment session.
       _alignmentStartTs = DateTime.now().millisecondsSinceEpoch;
     });
-    _startPoll();
+    _startAlignPoll();
 
     try {
       final result = await _workflowService.startAlignment(
@@ -321,6 +438,14 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
   void _confirmAlignmentDone() {
     _stopPoll();
     setState(() => _phase = _Phase.alignDone);
+  }
+
+  /// Bỏ qua khởi tạo Golden Pose khi đã có sẵn, chuyển thẳng sang căn chỉnh.
+  void _skipInitialization() {
+    setState(() {
+      _phase = _Phase.initDone;
+      _errorMessage = null;
+    });
   }
 
   Future<void> _runInspection() async {
@@ -376,7 +501,10 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
         ),
         actions: [
           if (_effectiveDevice != null)
-            _DeviceStatusBadge(device: _effectiveDevice!),
+            _DeviceStatusBadge(
+              device: _effectiveDevice!,
+              isOnlineOverride: _liveDeviceOnline,
+            ),
         ],
       ),
       body: SafeArea(
@@ -468,8 +596,15 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                         child: Text(a.name, overflow: TextOverflow.ellipsis),
                       ))
                   .toList(),
-              onChanged:
-                  locked ? null : (v) => setState(() => _selectedArtifact = v),
+              onChanged: locked
+                  ? null
+                  : (v) {
+                      setState(() {
+                        _selectedArtifact = v;
+                        _hasGoldenPose = false; // reset — se check ngay duoi
+                      });
+                      if (v != null) _checkGoldenPose((v as Artifact).id);
+                    },
             ),
             if (locked)
               Padding(
@@ -524,6 +659,9 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     final isDone = _phase.index >= _Phase.initDone.index;
     final isRunning = _phase == _Phase.initRunning;
     final canStart = _phase == _Phase.idle;
+    // Artifact already has a golden pose — offer two choices.
+    // _hasGoldenPose duoc check tu server API /pose/golden-pose/{id}/status.
+    final hasExistingGolden = canStart && _hasGoldenPose;
 
     return _StepCard(
       stepNumber: 1,
@@ -537,28 +675,107 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
             const SizedBox(height: 10),
             _ResultChips(result: _initResult!),
           ],
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: canStart ? _runInitialization : null,
-              icon: isRunning
-                  ? const _SmallSpinner()
-                  : const Icon(Icons.play_arrow),
-              label: Text(
-                isRunning
-                    ? 'Sending command...'
-                    : isDone
-                        ? 'Re-send (reset)'
-                        : 'Start Initialization',
+          if (hasExistingGolden) ...[  // ── Golden pose already exists ──
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.07),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.green.shade200),
               ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor:
-                    isDone ? Colors.grey.shade600 : AppColors.primary,
-                foregroundColor: Colors.white,
+              child: const Row(
+                children: [
+                  Icon(Icons.check_circle_outline,
+                      size: 16, color: Colors.green),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Golden Pose already initialized for this artifact.',
+                      style: TextStyle(fontSize: 12, color: Colors.green),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _runInitialization,
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: const Text('Re-initialize'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.orange,
+                      side: const BorderSide(color: Colors.orange),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _skipInitialization,
+                    icon: const Icon(Icons.skip_next),
+                    label: const Text('Start Alignment'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ] else ...[            // ── No golden pose yet / running / done ──
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: canStart ? _runInitialization : null,
+                icon: isRunning
+                    ? const _SmallSpinner()
+                    : const Icon(Icons.play_arrow),
+                label: Text(
+                  isRunning
+                      ? 'Command sent — waiting for device...'
+                      : isDone
+                          ? 'Re-initialize'
+                          : 'Start Initialization',
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor:
+                      isDone ? Colors.grey.shade600 : AppColors.primary,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+            if (isRunning) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: const Row(
+                  children: [
+                    SizedBox(
+                      width: 13, height: 13,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Waiting for device to capture & upload stereo pair...',
+                        style: TextStyle(fontSize: 12, color: Colors.blue),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
         ],
       ),
     );
@@ -570,6 +787,8 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     final canStart = _phase == _Phase.initDone;
     final isRunning = _phase == _Phase.alignRunning;
     final isDone = _phase.index >= _Phase.alignDone.index;
+    // Locked while Step 1 hasn't completed yet.
+    final isLocked = _phase.index < _Phase.initDone.index;
 
     return _StepCard(
       stepNumber: 2,
@@ -583,7 +802,11 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                   const TextStyle(fontSize: 12, color: AppColors.textMuted),
             )
           : null,
-      child: Column(
+      child: Opacity(
+        opacity: isLocked ? 0.4 : 1.0,
+        child: IgnorePointer(
+          ignoring: isLocked,
+          child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (_alignResult != null) ...[
@@ -646,7 +869,33 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                 style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
               ),
             ),
+          if (isLocked)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.lock_outline, size: 15, color: Colors.grey),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Complete or skip Step 1 (Initialize Golden Pose) first.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
+      ),
+        ),
       ),
     );
   }
@@ -859,11 +1108,13 @@ class _DeviationTile extends StatelessWidget {
 
 class _DeviceStatusBadge extends StatelessWidget {
   final IotDevice device;
-  const _DeviceStatusBadge({required this.device});
+  /// Neu duoc truyen vao, override device.isOnline (dung gia tri tu API moi nhat).
+  final bool? isOnlineOverride;
+  const _DeviceStatusBadge({required this.device, this.isOnlineOverride});
 
   @override
   Widget build(BuildContext context) {
-    final online = device.isOnline;
+    final online = isOnlineOverride ?? device.isOnline;
     return Container(
       margin: const EdgeInsets.only(right: 12, top: 10, bottom: 10),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

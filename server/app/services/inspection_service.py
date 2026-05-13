@@ -512,7 +512,9 @@ class InspectionService:
         workflow: dict[str, Any] = calibration_data.get("workflow", {}) if isinstance(calibration_data, dict) else {}
         auto_alignment_loop: bool = isinstance(workflow, dict) and bool(workflow.get("auto_alignment_loop", False))
         try:
-            pose_result = self._pose_service.correct_image(saved_path)
+            pose_result = self._pose_service.correct_image(
+                saved_path, artifact_id=artifact_id or None
+            )
             deviation = pose_result.get("deviation") if pose_result else None
 
             # Update metadata with pose deviation so Flutter can poll it live

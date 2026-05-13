@@ -35,6 +35,7 @@ class ArtifactRead(ArtifactBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    baseline_image_id: str | None = None
     has_image: bool
     reference_image_path: str | None = None
     created_at: datetime

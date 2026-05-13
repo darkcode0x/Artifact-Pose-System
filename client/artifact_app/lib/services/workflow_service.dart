@@ -81,5 +81,16 @@ class WorkflowService {
     );
     return Inspection.fromJson(body as Map<String, dynamic>);
   }
+
+  /// Kiem tra artifact da khoi tao golden pose chua.
+  Future<bool> hasGoldenPose(String artifactId) async {
+    try {
+      final body = await _api.get('/api/v1/pose/golden-pose/$artifactId/status');
+      if (body is Map<String, dynamic>) {
+        return body['has_golden_pose'] == true;
+      }
+    } catch (_) {}
+    return false;
+  }
 }
 

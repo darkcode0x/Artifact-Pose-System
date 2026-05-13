@@ -593,7 +593,7 @@ class _ImageCard extends StatelessWidget {
             width: double.infinity,
             color: AppColors.surfaceMuted,
             child: url != null && url!.isNotEmpty
-                ? _ZoomableNetworkImage(url: url!)
+                ? _ZoomableNetworkImage(url: url!, title: title)
                 : _imagePlaceholder(Icons.image_not_supported_outlined,
                     label: emptyLabel ?? 'Image unavailable'),
           ),
@@ -628,11 +628,36 @@ class _MiniImageTile extends StatelessWidget {
           child: AspectRatio(
             aspectRatio: 4 / 3,
             child: url != null && url!.isNotEmpty
-                ? _ZoomableNetworkImage(url: url!)
+                ? GestureDetector(
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            _FullScreenImagePage(url: url!, title: label),
+                        fullscreenDialog: true,
+                      ),
+                    ),
+                    child: Image.network(
+                      url!,
+                      fit: BoxFit.cover,
+                      loadingBuilder: (_, child, progress) =>
+                          progress == null
+                              ? child
+                              : const Center(
+                                  child: CircularProgressIndicator()),
+                      errorBuilder: (_, __, ___) => Container(
+                        color: AppColors.surfaceMuted,
+                        child: Center(
+                            child: Icon(emptyIcon,
+                                color: AppColors.textFaint, size: 30)),
+                      ),
+                    ),
+                  )
                 : Container(
                     color: AppColors.surfaceMuted,
                     child: Center(
-                        child: Icon(emptyIcon, color: AppColors.textFaint, size: 30)),
+                        child: Icon(emptyIcon,
+                            color: AppColors.textFaint, size: 30)),
                   ),
           ),
         ),
@@ -643,21 +668,74 @@ class _MiniImageTile extends StatelessWidget {
 
 class _ZoomableNetworkImage extends StatelessWidget {
   final String url;
-  const _ZoomableNetworkImage({required this.url});
+  final String title;
+  const _ZoomableNetworkImage({required this.url, this.title = 'Image'});
 
   @override
   Widget build(BuildContext context) {
-    return InteractiveViewer(
-      minScale: 0.8,
-      maxScale: 6.0,
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => _FullScreenImagePage(url: url, title: title),
+          fullscreenDialog: true,
+        ),
+      ),
       child: Image.network(
         url,
         fit: BoxFit.contain,
         width: double.infinity,
         loadingBuilder: (_, child, progress) =>
-            progress == null ? child : const Center(child: CircularProgressIndicator()),
+            progress == null
+                ? child
+                : const Center(child: CircularProgressIndicator()),
         errorBuilder: (_, __, ___) =>
             _imagePlaceholder(Icons.broken_image_outlined),
+      ),
+    );
+  }
+}
+
+class _FullScreenImagePage extends StatelessWidget {
+  final String url;
+  final String title;
+  const _FullScreenImagePage({required this.url, required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text(title,
+            style: const TextStyle(fontSize: 14, color: Colors.white)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.close, color: Colors.white),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ],
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 0.5,
+          maxScale: 8.0,
+          child: Image.network(
+            url,
+            fit: BoxFit.contain,
+            loadingBuilder: (_, child, progress) =>
+                progress == null
+                    ? child
+                    : const Center(
+                        child: CircularProgressIndicator(color: Colors.white),
+                      ),
+            errorBuilder: (_, __, ___) => const Center(
+              child: Icon(Icons.broken_image_outlined,
+                  color: Colors.white54, size: 64),
+            ),
+          ),
+        ),
       ),
     );
   }

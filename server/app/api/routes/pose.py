@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_container
 from app.core.database import get_db
 from app.models.artifact import Artifact, Image, ImageType
-from app.schemas.pose import PoseCorrectionResponse, PoseHealthResponse, PoseInitializeResponse
+from app.schemas.pose import (
+    GoldenPoseStatusResponse,
+    PoseCorrectionResponse,
+    PoseHealthResponse,
+    PoseInitializeResponse,
+)
 from app.services.state import AppContainer
 
 logger = logging.getLogger(__name__)
@@ -61,7 +66,9 @@ async def initialize_golden(
     right_path = await _save_temp_upload(temp_dir, right_file)
 
     try:
-        result = container.pose_service.initialize_golden(left_path, right_path)
+        result = container.pose_service.initialize_golden(
+            left_path, right_path, artifact_id=artifact_id or None
+        )
     except Exception as exc:
         logger.error("[initialize_golden] FAILED: %s", exc, exc_info=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -106,3 +113,13 @@ async def initialize_golden(
         message="Golden pose initialized successfully",
         result=result,
     )
+
+
+@router.get("/pose/golden-pose/{artifact_id}/status", response_model=GoldenPoseStatusResponse)
+def golden_pose_status(
+    artifact_id: str,
+    container: AppContainer = Depends(get_container),
+) -> GoldenPoseStatusResponse:
+    """Kiem tra artifact da co golden pose chua (per-artifact)."""
+    has_it = container.pose_service.has_golden_pose(artifact_id)
+    return GoldenPoseStatusResponse(artifact_id=artifact_id, has_golden_pose=has_it)

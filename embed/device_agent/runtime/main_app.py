@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import Any, Dict
 
 from api_client import APIClient, APIConfig
@@ -366,6 +366,32 @@ class MainApp:
     def _status_topic(self) -> str:
         return self.config.mqtt_status_topic_template.format(device_id=self.config.device_id)
 
+    # ── Heartbeat ────────────────────────────────────────────────────────────
+    _HEARTBEAT_INTERVAL_SEC: int = 30
+
+    def _start_heartbeat(self) -> None:
+        """Bat dau thread gui status online dinh ky de server biet thiet bi con song."""
+        if hasattr(self, "_heartbeat_stop"):
+            self._heartbeat_stop.set()  # dung thread cu neu con
+        self._heartbeat_stop = Event()
+        stop = self._heartbeat_stop
+
+        def _loop() -> None:
+            while not stop.wait(timeout=self._HEARTBEAT_INTERVAL_SEC):
+                try:
+                    self._publish_status("online")
+                except Exception as exc:
+                    print(f"[HEARTBEAT] Loi gui heartbeat: {exc}")
+
+        Thread(target=_loop, daemon=True, name="heartbeat").start()
+        print(f"[HEARTBEAT] Da bat dau gui heartbeat moi {self._HEARTBEAT_INTERVAL_SEC}s")
+
+    def _stop_heartbeat(self) -> None:
+        if hasattr(self, "_heartbeat_stop"):
+            self._heartbeat_stop.set()
+
+    # ── MQTT callbacks ───────────────────────────────────────────────────────
+
     def _on_mqtt_connect(self, client: Any, userdata: Any, flags: Any, rc: int) -> None:
         if rc != 0:
             print(f"[MQTT] Ket noi that bai, rc={rc}")
@@ -374,8 +400,10 @@ class MainApp:
         client.subscribe(self._cmd_topic, qos=self.config.mqtt_qos)
         print(f"[MQTT] Da subscribe topic lenh: {self._cmd_topic}")
         self._publish_status("online")
+        self._start_heartbeat()
 
     def _on_mqtt_disconnect(self, client: Any, userdata: Any, rc: int) -> None:
+        self._stop_heartbeat()
         if rc == 0:
             print("[MQTT] Da ngat ket noi chu dong")
             return
