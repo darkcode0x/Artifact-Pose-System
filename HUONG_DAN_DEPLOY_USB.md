@@ -95,6 +95,11 @@ adb devices
 ```
 
 ---
+### Lưu ý: Khi bạn thay model .pt mới, chạy lại:
+docker cp /path/to/new-model.pt artifact_server:/app/model/
+docker restart artifact_server
+
+
 
 ## Bước 2 — Khởi động Server (Docker)
 

@@ -86,8 +86,9 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
-      - ../model:/app/model
+      - data_logs:/app/data/logs
+      - data_uploads:/app/data/uploads
+      - model_data:/app/model
     command: >
       sh -c "
           PYTHONPATH=/app python tools/create_admin.py --username ${ADMIN_USERNAME:-admin} --password ${ADMIN_PASSWORD:-123456} --role admin &&
@@ -98,3 +99,6 @@ volumes:
   postgres_data:
   mosquitto_data:
   mosquitto_log:
+  data_logs:
+  data_uploads:
+  model_data:
