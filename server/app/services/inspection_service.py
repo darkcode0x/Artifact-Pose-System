@@ -38,11 +38,17 @@ class InspectionService:
         self._alignment_counters: dict[str, int] = {}
         self._alignment_start_ts: dict[str, float] = {}
 
-    async def _save_file(self, file: UploadFile) -> tuple[Path, int]:
+    async def _save_file(
+        self, file: UploadFile, artifact_id: str | None = None
+    ) -> tuple[Path, int]:
         ts_ms = int(time.time() * 1000)
         safe_name = (file.filename or "upload.bin").replace("/", "_").replace("\\", "_")
-        target_path = self._settings.uploads_dir / f"{ts_ms}_{safe_name}"
-        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if artifact_id and artifact_id.strip():
+            target_dir = self._artifact_uploads_dir / artifact_id.strip()
+        else:
+            target_dir = self._settings.uploads_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / f"{ts_ms}_{safe_name}"
         content = await file.read()
         target_path.write_bytes(content)
         return target_path, len(content)
@@ -307,8 +313,11 @@ class InspectionService:
 
                     # Save heatmap
                     heatmap_filename = f"heatmap_{artifact_id}_{ts_ms}.jpg"
-                    cv2.imwrite(str(self._settings.uploads_dir / heatmap_filename), heatmap_overlay)
-                    result["heatmap_path"] = heatmap_filename
+                    heatmap_dir = self._artifact_uploads_dir / artifact_id
+                    heatmap_dir.mkdir(parents=True, exist_ok=True)
+                    heatmap_full_path = heatmap_dir / heatmap_filename
+                    cv2.imwrite(str(heatmap_full_path), heatmap_overlay)
+                    result["heatmap_path"] = str(heatmap_full_path)
 
                     # Save SIFT-aligned image
                     if aligned_img is not None:
@@ -492,7 +501,7 @@ class InspectionService:
         artifact_id = str(meta.get("artifact_id", ""))
         calibration_data = meta.get("calibration_data", {})
 
-        saved_path, size_bytes = await self._save_file(file)
+        saved_path, size_bytes = await self._save_file(file, artifact_id=artifact_id or None)
 
         # Record metadata so the latest capture can be retrieved later
         capture_metadata: dict[str, Any] = {

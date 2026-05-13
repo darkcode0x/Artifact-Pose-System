@@ -633,6 +633,10 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                           _inspectionResult = null;
                           _errorMessage = null;
                         });
+                        // Refresh golden pose status sau reset — tranh hoi init lai
+                        // khi golden pose van con tren server.
+                        final artifactId = _selectedArtifact?.id;
+                        if (artifactId != null) _checkGoldenPose(artifactId);
                       },
                       style: TextButton.styleFrom(
                         padding: EdgeInsets.zero,

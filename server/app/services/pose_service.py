@@ -33,16 +33,59 @@ class PoseService:
 
     def _golden_pose_path(self, artifact_id: str | None) -> Path:
         if artifact_id and artifact_id.strip():
+            # Luu trong uploads/golden_poses/{id}/ de nam trong Docker volume da mount.
             return (
-                self._settings.data_dir
+                self._settings.uploads_dir
                 / "golden_poses"
                 / artifact_id.strip()
                 / "golden_pose.yaml"
             )
         return self._settings.artifact_golden_pose
 
+    def _resolve_golden_pose_path(self, artifact_id: str | None) -> Path | None:
+        """Tra ve path golden_pose ton tai thuc su.
+
+        Thu tu uu tien:
+        1. Per-artifact path (golden_poses/{id}/golden_pose.yaml)
+        2. Legacy global path (golden_pose.yaml) — chi dung khi per-artifact chua co
+           va artifact_id khong rong. Khi tim thay, tu dong migrate sang per-artifact.
+        """
+        per_artifact = self._golden_pose_path(artifact_id)
+        if per_artifact.exists():
+            return per_artifact
+
+        # Fallback: check file global cu (truoc khi co per-artifact)
+        global_path = self._settings.artifact_golden_pose
+        # Also check old data/golden_poses/{id}/ path (truoc khi chuyen vao uploads/)
+        old_data_path = (
+            self._settings.data_dir / "golden_poses" / artifact_id.strip() / "golden_pose.yaml"
+            if artifact_id and artifact_id.strip() else None
+        )
+        source = None
+        if old_data_path and old_data_path.exists():
+            source = old_data_path
+        elif artifact_id and artifact_id.strip() and global_path.exists():
+            source = global_path
+
+        if source is not None:
+            # Tu dong migrate sang per-artifact path
+            per_artifact.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(str(source), str(per_artifact))
+            # Copy descriptors .npy neu co
+            desc_src = source.with_name(source.stem + "_descriptors.npy")
+            if desc_src.exists():
+                shutil.copy2(str(desc_src), str(per_artifact.parent / desc_src.name))
+            import logging as _log
+            _log.getLogger(__name__).info(
+                "[pose] Migrated golden_pose %s -> %s", source, per_artifact
+            )
+            return per_artifact
+
+        return None
+
     def has_golden_pose(self, artifact_id: str) -> bool:
-        return self._golden_pose_path(artifact_id).exists()
+        return self._resolve_golden_pose_path(artifact_id) is not None
 
     # -- Health ----------------------------------------------------------------
 
@@ -81,10 +124,10 @@ class PoseService:
             raise RuntimeError(
                 f"Camera params not found: {self._settings.artifact_camera_params}"
             )
-        golden_pose_path = self._golden_pose_path(artifact_id)
-        if not golden_pose_path.exists():
+        golden_pose_path = self._resolve_golden_pose_path(artifact_id)
+        if golden_pose_path is None:
             raise RuntimeError(
-                f"Golden pose not found for artifact '{artifact_id}': {golden_pose_path}"
+                f"Golden pose not found for artifact '{artifact_id}'"
             )
         golden_pose = pose_common.load_golden_pose(golden_pose_path)
         if golden_pose is None:
