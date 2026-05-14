@@ -27,8 +27,8 @@ enum _Phase {
 }
 
 class DeviceWorkflowScreen extends StatefulWidget {
-  // When opened from DeviceListScreen, device is known.
-  // When opened from ArtifactDetailScreen, device is null and must be selected.
+  /// Opened from DeviceListScreen: [device] is already known.
+  /// Opened from ArtifactDetailScreen: [device] is null and must be selected.
   final IotDevice? device;
   final String? preselectedArtifactId;
 
@@ -42,7 +42,6 @@ class DeviceWorkflowScreen extends StatefulWidget {
   State<DeviceWorkflowScreen> createState() => _DeviceWorkflowScreenState();
 }
 
-// Persists alignment state across navigation pushes/pops.
 class _PersistedWorkflowState {
   final _Phase phase;
   final List<Map<String, dynamic>> acks;
@@ -52,6 +51,7 @@ class _PersistedWorkflowState {
   final Inspection? inspectionResult;
   final String? selectedArtifactId;
   final String? selectedDeviceCode;
+  final int? initStartTs;
   final int? alignmentStartTs;
 
   const _PersistedWorkflowState({
@@ -63,26 +63,25 @@ class _PersistedWorkflowState {
     this.inspectionResult,
     this.selectedArtifactId,
     this.selectedDeviceCode,
+    this.initStartTs,
     this.alignmentStartTs,
   });
 }
 
 class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
-  // Static cache so state survives navigation away and back.
   static final Map<String, _PersistedWorkflowState> _stateCache = {};
 
-  late WorkflowService _workflowService;
-  late ArtifactService _artifactService;
-  late DeviceService _deviceService;
+  static const double _baselineMm = 100.0;
+  static const Duration _pollInterval = Duration(seconds: 3);
+
+  late final WorkflowService _workflowService;
+  late final ArtifactService _artifactService;
+  late final DeviceService _deviceService;
 
   List<Artifact> _artifacts = [];
-  Artifact? _selectedArtifact;
-
-  // Baseline is always 100 mm — not editable by user.
-  static const double _baselineMm = 100.0;
-
-  // Device selection (used when widget.device is null)
   List<IotDevice> _devices = [];
+
+  Artifact? _selectedArtifact;
   IotDevice? _selectedDevice;
 
   _Phase _phase = _Phase.idle;
@@ -90,68 +89,78 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
 
   Map<String, dynamic>? _initResult;
   Map<String, dynamic>? _alignResult;
-  // ACKs for the *current* alignment session only (cleared on new start).
-  List<Map<String, dynamic>> _acks = [];
-  int? _alignmentStartTs;
   Map<String, dynamic>? _latestDeviation;
-  Timer? _pollTimer;
-
   Inspection? _inspectionResult;
 
-  // Golden pose status per artifact — loaded from server.
-  bool _hasGoldenPose = false;
+  List<Map<String, dynamic>> _acks = [];
+  Timer? _pollTimer;
+  bool _pollInFlight = false;
 
-  // Trang thai online/offline moi nhat tu server (override widget.device.isOnline).
-  // null = chua check lan nao, true/false = ket qua API moi nhat.
+  int? _initStartTs;
+  int? _alignmentStartTs;
+
+  bool _hasGoldenPose = false;
+  bool _checkingGoldenPose = false;
   bool? _liveDeviceOnline;
 
-  // ID of cached selected artifact/device — resolved after fresh list is loaded.
   String? _restoredArtifactId;
   String? _restoredDeviceCode;
 
   IotDevice? get _effectiveDevice => widget.device ?? _selectedDevice;
 
-  // Trang thai online hien thi: dung _liveDeviceOnline neu co, fallback ve model.
   bool get _isDeviceOnline =>
       _liveDeviceOnline ?? (_effectiveDevice?.isOnline ?? false);
 
-  // True when at least one alignment_complete ACK has been received this session.
-  bool get _alignmentCompletedThisSession =>
-      _acks.any((ack) =>
-          (ack['payload'] as Map<String, dynamic>?)?['action'] ==
-          'alignment_complete');
+  bool get _hasRequiredSelection =>
+      _effectiveDevice != null && _selectedArtifact != null;
+
+  bool get _canSendDeviceCommand => _hasRequiredSelection && _isDeviceOnline;
+
+  bool get _alignmentCompletedThisSession => _acks.any((ack) {
+        final payload = _asStringMap(ack['payload']);
+        return payload['action'] == 'alignment_complete';
+      });
+
+  String get _cacheKey =>
+      widget.preselectedArtifactId ?? _effectiveDevice?.deviceCode ?? '';
 
   @override
   void initState() {
     super.initState();
+
     final api = context.read<ApiClient>();
     _workflowService = WorkflowService(api);
     _artifactService = ArtifactService(api);
     _deviceService = DeviceService(api);
+
+    _restoreState();
     _loadArtifacts();
     if (widget.device == null) _loadDevices();
-    _restoreState();
-    // Check trang thai thiet bi ngay khi mo man hinh
+
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _refreshDeviceOnlineStatus(),
     );
   }
 
+  @override
+  void dispose() {
+    _persistState();
+    _stopPoll(refreshDevice: false);
+    super.dispose();
+  }
+
   void _restoreState() {
-    // Use a stable key: artifact ID when opened from artifact detail,
-    // device code when opened from device list.
     final key = widget.preselectedArtifactId ?? widget.device?.deviceCode ?? '';
     if (key.isEmpty) return;
+
     final cached = _stateCache[key];
     if (cached == null) return;
-    // Don't restore a fully completed session — start fresh so the user
-    // sees the golden-pose check and can begin a new workflow.
+
     if (cached.phase == _Phase.done) {
       _stateCache.remove(key);
       return;
     }
-    // inspectRunning means the app was killed mid-inspection — outcome unknown;
-    // roll back to alignDone so the user can re-inspect.
+
     _phase = cached.phase == _Phase.inspectRunning
         ? _Phase.alignDone
         : cached.phase;
@@ -160,10 +169,11 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     _initResult = cached.initResult;
     _alignResult = cached.alignResult;
     _inspectionResult = cached.inspectionResult;
+    _initStartTs = cached.initStartTs;
     _alignmentStartTs = cached.alignmentStartTs;
     _restoredArtifactId = cached.selectedArtifactId;
     _restoredDeviceCode = cached.selectedDeviceCode;
-    // selectedArtifact / selectedDevice resolved once load completes.
+
     if (_phase == _Phase.initRunning) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _startInitPoll());
     } else if (_phase == _Phase.alignRunning) {
@@ -172,8 +182,9 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
   }
 
   void _persistState() {
-    final key = widget.preselectedArtifactId ?? _effectiveDevice?.deviceCode ?? '';
+    final key = _cacheKey;
     if (key.isEmpty) return;
+
     _stateCache[key] = _PersistedWorkflowState(
       phase: _phase,
       acks: List.of(_acks),
@@ -183,194 +194,118 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       inspectionResult: _inspectionResult,
       selectedArtifactId: _selectedArtifact?.id,
       selectedDeviceCode: _selectedDevice?.deviceCode,
+      initStartTs: _initStartTs,
       alignmentStartTs: _alignmentStartTs,
     );
-  }
-
-  @override
-  void dispose() {
-    _persistState();
-    _pollTimer?.cancel();
-    super.dispose();
   }
 
   Future<void> _loadDevices() async {
     try {
       final list = await _deviceService.list();
       if (!mounted) return;
+
       setState(() {
         _devices = list;
         if (_restoredDeviceCode != null) {
-          try {
-            _selectedDevice = list.firstWhere(
-              (d) => d.deviceCode == _restoredDeviceCode,
-            );
-          } catch (_) {}
+          _selectedDevice = _firstOrNull(
+            list,
+            (device) => device.deviceCode == _restoredDeviceCode,
+          );
           _restoredDeviceCode = null;
         }
       });
-    } catch (_) {}
+
+      if (_selectedDevice != null) {
+        unawaited(_refreshDeviceOnlineStatus());
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _devices = []);
+    }
   }
 
   Future<void> _loadArtifacts() async {
     try {
       final list = await _artifactService.list();
       if (!mounted) return;
+
       setState(() {
         _artifacts = list;
-        // Restore cached selection or use preselected artifact id.
+
         final targetId = _restoredArtifactId ?? widget.preselectedArtifactId;
         if (targetId != null) {
-          try {
-            _selectedArtifact = list.firstWhere((a) => a.id == targetId);
-          } catch (_) {}
+          _selectedArtifact = _firstOrNull(
+            list,
+            (artifact) => artifact.id == targetId,
+          );
         }
         _restoredArtifactId = null;
       });
-      // Sau khi load xong, check golden pose cho artifact dang chon.
-      if (_selectedArtifact != null) {
-        await _checkGoldenPose(_selectedArtifact!.id);
-      }
+
+      final artifactId = _selectedArtifact?.id;
+      if (artifactId != null) await _checkGoldenPose(artifactId);
     } catch (_) {
-      // silent fail — user will see empty dropdown
+      if (!mounted) return;
+      setState(() => _artifacts = []);
     }
   }
 
   Future<void> _checkGoldenPose(String artifactId) async {
-    final has = await _workflowService.hasGoldenPose(artifactId);
-    if (!mounted) return;
-    setState(() => _hasGoldenPose = has);
+    setState(() => _checkingGoldenPose = true);
+
+    try {
+      final has = await _workflowService.hasGoldenPose(artifactId);
+      if (!mounted) return;
+      setState(() => _hasGoldenPose = has);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _hasGoldenPose = false);
+    } finally {
+      if (mounted) setState(() => _checkingGoldenPose = false);
+    }
   }
 
   Future<void> _refreshDeviceOnlineStatus() async {
     final deviceCode = _effectiveDevice?.deviceCode;
     if (deviceCode == null) return;
+
     try {
       final fresh = await _deviceService.getStatus(deviceCode);
       if (!mounted) return;
-      setState(() => _liveDeviceOnline = fresh.isOnline);
-    } catch (_) {
-      // Neu API loi, giu nguyen trang thai cu
-    }
-  }
 
-  // Timestamp khi bat dau init — dung de chi chap nhan ACK moi hon
-  int? _initStartTs;
-
-  void _startInitPoll() {
-    _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
-      if (!mounted) return;
-      final deviceId = _effectiveDevice?.deviceCode;
-      if (deviceId == null) return;
-
-      try {
-        final acks = await _workflowService.pollAcks(deviceId, limit: 20);
-        if (!mounted) return;
-
-        // Tim ACK capture_stereo_pair ok moi hon thoi diem bat dau init
-        final startTs = _initStartTs ?? 0;
-        final completed = acks.any((ack) {
-          final ts = (ack['received_ts_ms'] as int?) ??
-              ((ack['payload'] as Map?))?['ts_ms'] as int? ??
-              0;
-          if (ts < startTs) return false;
-          final payload = ack['payload'] as Map<String, dynamic>? ?? {};
-          final action = payload['action']?.toString();
-          final result = payload['result'] as Map<String, dynamic>? ?? {};
-          return action == 'capture_stereo_pair' && result['status'] == 'ok';
-        });
-
-        if (completed) {
-          _stopPoll();
-          // Refresh artifact de cap nhat has_image
-          final artifactId = _selectedArtifact?.id;
-          if (artifactId != null) {
-            try {
-              final refreshed = await _artifactService.get(artifactId);
-              if (mounted) setState(() => _selectedArtifact = refreshed);
-            } catch (_) {}
-            // Refresh golden pose status sau khi init xong.
-            await _checkGoldenPose(artifactId);
-          }
-          if (mounted) {
-            setState(() => _phase = _Phase.initDone);
-          }
-        }
-      } catch (_) {}
-    });
-  }
-
-  void _startAlignPoll() {
-    _pollTimer?.cancel();
-    var _pollCount = 0;
-    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
-      if (!mounted) return;
-      final deviceId = _effectiveDevice?.deviceCode;
-      if (deviceId == null) return;
-
-      _pollCount++;
-
-      // Poll ACKs
-      try {
-        final acks = await _workflowService.pollAcks(deviceId, limit: 20);
-        if (!mounted) return;
-        setState(() => _acks = acks.reversed.toList());
-      } catch (_) {}
-
-      // Poll latest pose deviation for live alignment display
-      try {
-        final meta = await _workflowService.getLatestMetadata(deviceId);
-        final deviation = (meta['metadata'] as Map<String, dynamic>?)?['pose_deviation']
-            as Map<String, dynamic>?;
-        if (mounted && deviation != null) {
-          setState(() => _latestDeviation = deviation);
-        }
-      } catch (_) {}
-
-      // Refresh trang thai online moi 10 poll (~30s)
-      if (_pollCount % 10 == 0) {
-        _refreshDeviceOnlineStatus();
+      if (_effectiveDevice?.deviceCode == deviceCode) {
+        setState(() => _liveDeviceOnline = fresh.isOnline);
       }
-    });
-  }
-
-  void _stopPoll() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
-    // Refresh trang thai thiet bi khi dung poll
-    _refreshDeviceOnlineStatus();
+    } catch (_) {
+      // Keep the current status if the status API fails.
+    }
   }
 
   Future<void> _runInitialization() async {
     final device = _effectiveDevice;
-    if (device == null) {
-      setState(() => _errorMessage = 'Please select a device first');
-      return;
-    }
     final artifact = _selectedArtifact;
-    if (artifact == null) {
-      setState(() => _errorMessage = 'Please select an artifact first');
-      return;
-    }
+
+    if (!_validateCanSendCommand(device: device, artifact: artifact)) return;
+
     setState(() {
       _phase = _Phase.initRunning;
       _errorMessage = null;
       _initResult = null;
       _initStartTs = DateTime.now().millisecondsSinceEpoch;
     });
+    _persistState();
 
     try {
       final result = await _workflowService.startInitialization(
-        deviceId: _effectiveDevice!.deviceCode,
-        artifactId: artifact.id,
+        deviceId: device!.deviceCode,
+        artifactId: artifact!.id,
         baselineMm: _baselineMm,
       );
       if (!mounted) return;
-      final ok = result['ok'] == true;
+
       setState(() => _initResult = result);
-      if (ok) {
-        // Lenh da duoc gui den thiet bi — cho den khi nhan ACK capture_stereo_pair ok
+
+      if (result['ok'] == true) {
         _startInitPoll();
       } else {
         setState(() {
@@ -379,45 +314,51 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
               'Initialization failed: ${result['publish_error'] ?? 'unknown error'}';
         });
       }
+      _persistState();
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
         _phase = _Phase.idle;
         _errorMessage = e.message;
       });
+      _persistState();
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _phase = _Phase.idle;
         _errorMessage = e.toString();
       });
+      _persistState();
     }
   }
 
   Future<void> _runAlignment() async {
-    final artifact = _selectedArtifact;
-    if (artifact == null) return;
     final device = _effectiveDevice;
-    if (device == null) return;
+    final artifact = _selectedArtifact;
+
+    if (!_validateCanSendCommand(device: device, artifact: artifact)) return;
 
     setState(() {
       _phase = _Phase.alignRunning;
       _errorMessage = null;
       _alignResult = null;
-      _acks = [];  // Clear ACKs for the new alignment session.
+      _latestDeviation = null;
+      _acks = [];
       _alignmentStartTs = DateTime.now().millisecondsSinceEpoch;
     });
+    _persistState();
     _startAlignPoll();
 
     try {
       final result = await _workflowService.startAlignment(
-        deviceId: device.deviceCode,
-        artifactId: artifact.id,
+        deviceId: device!.deviceCode,
+        artifactId: artifact!.id,
       );
       if (!mounted) return;
-      final ok = result['ok'] == true;
+
       setState(() => _alignResult = result);
-      if (!ok) {
+
+      if (result['ok'] != true) {
         _stopPoll();
         if (!mounted) return;
         setState(() {
@@ -426,8 +367,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
               'Alignment failed: ${result['publish_error'] ?? 'unknown error'}';
         });
       }
-      // If ok=true, keep phase=alignRunning and keep polling.
-      // Operator presses "Căn chỉnh xong" when satisfied.
+      _persistState();
     } on ApiException catch (e) {
       _stopPoll();
       if (!mounted) return;
@@ -435,6 +375,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
         _phase = _Phase.initDone;
         _errorMessage = e.message;
       });
+      _persistState();
     } catch (e) {
       _stopPoll();
       if (!mounted) return;
@@ -442,27 +383,30 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
         _phase = _Phase.initDone;
         _errorMessage = e.toString();
       });
+      _persistState();
     }
   }
 
   void _confirmAlignmentDone() {
     _stopPoll();
     setState(() => _phase = _Phase.alignDone);
+    _persistState();
   }
 
-  /// Bỏ qua khởi tạo Golden Pose khi đã có sẵn, chuyển thẳng sang căn chỉnh.
   void _skipInitialization() {
     setState(() {
       _phase = _Phase.initDone;
       _errorMessage = null;
     });
+    _persistState();
   }
 
   Future<void> _runInspection() async {
-    final artifact = _selectedArtifact;
-    if (artifact == null) return;
     final device = _effectiveDevice;
-    if (device == null) return;
+    final artifact = _selectedArtifact;
+
+    if (!_validateCanSendCommand(device: device, artifact: artifact)) return;
+
     final auth = context.read<AuthProvider>();
 
     setState(() {
@@ -470,49 +414,250 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       _errorMessage = null;
       _inspectionResult = null;
     });
+    _persistState();
 
     try {
       final inspection = await _workflowService.inspectFromDevice(
-        deviceId: device.deviceCode,
-        artifactId: artifact.id,
+        deviceId: device!.deviceCode,
+        artifactId: artifact!.id,
         description: 'Workflow: ${device.deviceCode}',
         createdBy: auth.username,
       );
       if (!mounted) return;
+
       setState(() {
         _inspectionResult = inspection;
         _phase = _Phase.done;
       });
+      _persistState();
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
         _phase = _Phase.alignDone;
         _errorMessage = e.message;
       });
+      _persistState();
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _phase = _Phase.alignDone;
         _errorMessage = e.toString();
       });
+      _persistState();
     }
   }
 
-  // ─── BUILD ────────────────────────────────────────────────────────────────
+  bool _validateCanSendCommand({
+    required IotDevice? device,
+    required Artifact? artifact,
+  }) {
+    if (device == null) {
+      setState(() => _errorMessage = 'Please select a device first.');
+      return false;
+    }
+    if (artifact == null) {
+      setState(() => _errorMessage = 'Please select an artifact first.');
+      return false;
+    }
+    if (!_isDeviceOnline) {
+      setState(() {
+        _errorMessage =
+            'Device ${device.deviceCode} is offline. Commands cannot be sent.';
+      });
+      return false;
+    }
+    return true;
+  }
+
+  void _resetWorkflow() {
+    _stopPoll();
+    setState(() {
+      _phase = _Phase.idle;
+      _errorMessage = null;
+      _initResult = null;
+      _alignResult = null;
+      _latestDeviation = null;
+      _inspectionResult = null;
+      _acks = [];
+      _initStartTs = null;
+      _alignmentStartTs = null;
+    });
+
+    final artifactId = _selectedArtifact?.id;
+    if (artifactId != null) unawaited(_checkGoldenPose(artifactId));
+    _persistState();
+  }
+
+  void _startInitPoll() {
+    _pollTimer?.cancel();
+    unawaited(_pollInitOnce());
+    _pollTimer = Timer.periodic(
+      _pollInterval,
+      (_) => unawaited(_pollInitOnce()),
+    );
+  }
+
+  Future<void> _pollInitOnce() async {
+    if (_pollInFlight || !mounted) return;
+
+    final deviceCode = _effectiveDevice?.deviceCode;
+    if (deviceCode == null) return;
+
+    _pollInFlight = true;
+    try {
+      final acks = await _workflowService.pollAcks(deviceCode, limit: 20);
+      if (!mounted) return;
+
+      final completed = acks.any(_isCurrentInitCompleteAck);
+      if (!completed) return;
+
+      _stopPoll();
+
+      final artifactId = _selectedArtifact?.id;
+      if (artifactId != null) {
+        try {
+          final refreshed = await _artifactService.get(artifactId);
+          if (mounted) setState(() => _selectedArtifact = refreshed);
+        } catch (_) {}
+
+        await _checkGoldenPose(artifactId);
+      }
+
+      if (!mounted) return;
+      setState(() => _phase = _Phase.initDone);
+      _persistState();
+    } catch (_) {
+      // Temporary poll failure. Keep polling on the next tick.
+    } finally {
+      _pollInFlight = false;
+    }
+  }
+
+  void _startAlignPoll() {
+    _pollTimer?.cancel();
+    var pollCount = 0;
+
+    unawaited(_pollAlignmentOnce());
+    _pollTimer = Timer.periodic(_pollInterval, (_) {
+      pollCount++;
+      unawaited(_pollAlignmentOnce());
+
+      if (pollCount % 10 == 0) {
+        unawaited(_refreshDeviceOnlineStatus());
+      }
+    });
+  }
+
+  Future<void> _pollAlignmentOnce() async {
+    if (_pollInFlight || !mounted) return;
+
+    final deviceCode = _effectiveDevice?.deviceCode;
+    if (deviceCode == null) return;
+
+    _pollInFlight = true;
+    try {
+      final acks = await _workflowService.pollAcks(deviceCode, limit: 30);
+      if (!mounted) return;
+
+      final currentAcks = acks.where(_isCurrentAlignmentAck).toList()
+        ..sort((a, b) => _ackTimestampMs(b).compareTo(_ackTimestampMs(a)));
+
+      setState(() => _acks = currentAcks);
+
+      try {
+        final meta = await _workflowService.getLatestMetadata(deviceCode);
+        final metadata = _asStringMap(meta['metadata']);
+        final deviation = _asStringMap(metadata['pose_deviation']);
+        if (mounted && deviation.isNotEmpty) {
+          setState(() => _latestDeviation = deviation);
+        }
+      } catch (_) {}
+
+      _persistState();
+    } catch (_) {
+      // Temporary poll failure. Keep polling on the next tick.
+    } finally {
+      _pollInFlight = false;
+    }
+  }
+
+  void _stopPoll({bool refreshDevice = true}) {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _pollInFlight = false;
+
+    if (refreshDevice && mounted) {
+      unawaited(_refreshDeviceOnlineStatus());
+    }
+  }
+
+  bool _isCurrentInitCompleteAck(Map<String, dynamic> ack) {
+    final startTs = _initStartTs ?? 0;
+    if (_ackTimestampMs(ack) < startTs) return false;
+
+    final payload = _asStringMap(ack['payload']);
+    final result = _asStringMap(payload['result']);
+
+    return payload['action'] == 'capture_stereo_pair' &&
+        result['status'] == 'ok';
+  }
+
+  bool _isCurrentAlignmentAck(Map<String, dynamic> ack) {
+    final startTs = _alignmentStartTs;
+    // If we don't know when this session started, don't show stale acks.
+    if (startTs == null) return false;
+    if (_ackTimestampMs(ack) < startTs) return false;
+
+    // Also filter by artifact_id so acks from other artifacts are excluded.
+    final artifactId = _selectedArtifact?.id;
+    if (artifactId == null) return true;
+    final payload = _asStringMap(ack['payload']);
+    final payloadArtifactId = payload['artifact_id']?.toString();
+    if (payloadArtifactId == null) return true; // no artifact_id field, keep
+    return payloadArtifactId == artifactId;
+  }
+
+  static int _ackTimestampMs(Map<String, dynamic> ack) {
+    final receivedTs = ack['received_ts_ms'];
+    if (receivedTs is int) return receivedTs;
+    if (receivedTs is num) return receivedTs.toInt();
+
+    final payload = _asStringMap(ack['payload']);
+    final payloadTs = payload['ts_ms'];
+    if (payloadTs is int) return payloadTs;
+    if (payloadTs is num) return payloadTs.toInt();
+
+    return 0;
+  }
+
+  static Map<String, dynamic> _asStringMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) {
+      return value.map((key, val) => MapEntry(key.toString(), val));
+    }
+    return <String, dynamic>{};
+  }
+
+  static T? _firstOrNull<T>(Iterable<T> items, bool Function(T item) test) {
+    for (final item in items) {
+      if (test(item)) return item;
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final device = _effectiveDevice;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          _effectiveDevice != null
-              ? 'Workflow: ${_effectiveDevice!.deviceCode}'
-              : 'Workflow: Select Device',
+          device != null ? 'Workflow: ${device.deviceCode}' : 'Workflow',
         ),
         actions: [
-          if (_effectiveDevice != null)
+          if (device != null)
             _DeviceStatusBadge(
-              device: _effectiveDevice!,
+              device: device,
               isOnlineOverride: _liveDeviceOnline,
             ),
         ],
@@ -531,6 +676,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                 ),
                 const SizedBox(height: 12),
               ],
+              _buildOfflineBanner(),
               _buildStep1Card(),
               const SizedBox(height: 12),
               _buildStep2Card(),
@@ -546,22 +692,49 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     );
   }
 
-  // ─── Device + Artifact + baseline selector ───────────────────────────────
+  Widget _buildOfflineBanner() {
+    final device = _effectiveDevice;
+    if (device == null || _isDeviceOnline || _phase != _Phase.idle) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: _InfoBanner(
+        icon: Icons.wifi_off,
+        color: Colors.orange,
+        message:
+            'Device ${device.deviceCode} is offline. Turn it on or check the connection before starting the workflow.',
+      ),
+    );
+  }
 
   Widget _buildSelectors() {
     final locked = _phase != _Phase.idle;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Workflow Configuration',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Workflow Configuration',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                ),
+                if (_checkingGoldenPose)
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
             ),
             const SizedBox(height: 10),
-            // Device selector — only show when device not pre-provided
             if (widget.device == null) ...[
               DropdownButtonFormField<IotDevice>(
                 value: _selectedDevice,
@@ -570,26 +743,16 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                   hintText: 'Select IoT device...',
                   prefixIcon: Icon(Icons.router_outlined),
                 ),
-                items: _devices
-                    .map((d) => DropdownMenuItem(
-                          value: d,
-                          child: Row(
-                            children: [
-                              Icon(Icons.circle,
-                                  size: 8,
-                                  color: d.isOnline
-                                      ? Colors.green
-                                      : Colors.grey),
-                              const SizedBox(width: 6),
-                              Text(d.deviceCode,
-                                  overflow: TextOverflow.ellipsis),
-                            ],
-                          ),
-                        ))
-                    .toList(),
+                items: _devices.map(_buildDeviceMenuItem).toList(),
                 onChanged: locked
                     ? null
-                    : (v) => setState(() => _selectedDevice = v),
+                    : (device) {
+                        setState(() {
+                          _selectedDevice = device;
+                          _liveDeviceOnline = null;
+                        });
+                        unawaited(_refreshDeviceOnlineStatus());
+                      },
               ),
               const SizedBox(height: 10),
             ],
@@ -600,126 +763,123 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                 hintText: 'Select artifact to inspect...',
                 prefixIcon: Icon(Icons.inventory_2_outlined),
               ),
-              items: _artifacts
-                  .map((a) => DropdownMenuItem(
-                        value: a,
-                        child: Text(a.name, overflow: TextOverflow.ellipsis),
-                      ))
-                  .toList(),
+              items: _artifacts.map(_buildArtifactMenuItem).toList(),
               onChanged: locked
                   ? null
-                  : (v) {
+                  : (artifact) {
                       setState(() {
-                        _selectedArtifact = v;
-                        _hasGoldenPose = false; // reset — se check ngay duoi
+                        _selectedArtifact = artifact;
+                        _hasGoldenPose = false;
                       });
-                      if (v != null) _checkGoldenPose((v as Artifact).id);
+                      if (artifact != null) {
+                        unawaited(_checkGoldenPose(artifact.id));
+                      }
                     },
             ),
-            if (locked)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Row(
-                  children: [
-                    const Icon(Icons.lock_outline,
-                        size: 14, color: AppColors.textMuted),
-                    const SizedBox(width: 4),
-                    const Expanded(
-                      child: Text(
-                        'Workflow in progress — cannot change',
-                        style: TextStyle(
-                            fontSize: 11, color: AppColors.textMuted),
+            if (locked) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.lock_outline,
+                    size: 14,
+                    color: AppColors.textMuted,
+                  ),
+                  const SizedBox(width: 4),
+                  const Expanded(
+                    child: Text(
+                      'Workflow in progress — configuration is locked.',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: AppColors.textMuted,
                       ),
                     ),
-                    TextButton(
-                      onPressed: () {
-                        _stopPoll();
-                        setState(() {
-                          _phase = _Phase.idle;
-                          _initResult = null;
-                          _alignResult = null;
-                          _acks = [];
-                          _latestDeviation = null;
-                          _inspectionResult = null;
-                          _errorMessage = null;
-                        });
-                        // Refresh golden pose status sau reset — tranh hoi init lai
-                        // khi golden pose van con tren server.
-                        final artifactId = _selectedArtifact?.id;
-                        if (artifactId != null) _checkGoldenPose(artifactId);
-                      },
-                      style: TextButton.styleFrom(
-                        padding: EdgeInsets.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: const Text('Reset',
-                          style:
-                              TextStyle(fontSize: 11, color: Colors.red)),
+                  ),
+                  TextButton(
+                    onPressed: _resetWorkflow,
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                  ],
-                ),
+                    child: const Text(
+                      'Reset',
+                      style: TextStyle(fontSize: 11, color: Colors.red),
+                    ),
+                  ),
+                ],
               ),
+            ],
           ],
         ),
       ),
     );
   }
 
-  // ─── Old method removed (now using _buildSelectors) ─────────────────────
+  DropdownMenuItem<IotDevice> _buildDeviceMenuItem(IotDevice device) {
+    return DropdownMenuItem(
+      value: device,
+      child: Row(
+        children: [
+          Icon(
+            Icons.circle,
+            size: 8,
+            color: device.isOnline ? Colors.green : Colors.grey,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              device.deviceCode,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-  // ─── Step 1 ───────────────────────────────────────────────────────────────
+  DropdownMenuItem<Artifact> _buildArtifactMenuItem(Artifact artifact) {
+    return DropdownMenuItem(
+      value: artifact,
+      child: Text(
+        artifact.name,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
 
   Widget _buildStep1Card() {
-    final isDone = _phase.index >= _Phase.initDone.index;
     final isRunning = _phase == _Phase.initRunning;
-    final canStart = _phase == _Phase.idle;
-    // Hien thi banner "Golden Pose da co" khi:
-    // - phase == idle (chua bat dau session moi) VA golden pose ton tai, HOAC
-    // - phase == initDone nhung init duoc skip (skipInitialization)
-    // Dung de offer: Re-initialize | Start Alignment.
-    final hasExistingGolden = _hasGoldenPose && canStart;
+    final isDone = _phase.index >= _Phase.initDone.index;
+    final canStart = _phase == _Phase.idle && _canSendDeviceCommand;
+    final canUseExistingGolden = _phase == _Phase.idle && _hasGoldenPose;
 
     return _StepCard(
       stepNumber: 1,
-      title: 'Initialize Golden Pose (Stereo)',
+      title: 'Initialize Golden Pose',
+      subtitle:
+          'Capture the reference stereo pair. Baseline is fixed at ${_baselineMm.toStringAsFixed(0)} mm.',
       isDone: isDone,
       isActive: isRunning,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (_initResult != null) ...[
-            const SizedBox(height: 10),
             _ResultChips(result: _initResult!),
-          ],
-          if (hasExistingGolden) ...[  // ── Golden pose already exists ──
             const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.07),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.green.shade200),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.check_circle_outline,
-                      size: 16, color: Colors.green),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Golden Pose already initialized for this artifact.',
-                      style: TextStyle(fontSize: 12, color: Colors.green),
-                    ),
-                  ),
-                ],
-              ),
+          ],
+          if (canUseExistingGolden) ...[
+            const _InfoBanner(
+              icon: Icons.check_circle_outline,
+              color: Colors.green,
+              message:
+                  'Golden Pose already exists for this artifact. You can reuse it and skip initialization.',
             ),
             const SizedBox(height: 10),
             Row(
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: _runInitialization,
+                    onPressed: canStart ? _runInitialization : null,
                     icon: const Icon(Icons.refresh, size: 16),
                     label: const Text('Re-initialize'),
                     style: OutlinedButton.styleFrom(
@@ -731,9 +891,9 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: _skipInitialization,
+                    onPressed: _canSendDeviceCommand ? _skipInitialization : null,
                     icon: const Icon(Icons.skip_next),
-                    label: const Text('Start Alignment'),
+                    label: const Text('Use Existing Pose'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
@@ -742,53 +902,38 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                 ),
               ],
             ),
-          ] else ...[            // ── No golden pose yet / running / done ──
-            const SizedBox(height: 12),
+          ] else ...[
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
                 onPressed: canStart ? _runInitialization : null,
                 icon: isRunning
                     ? const _SmallSpinner()
-                    : const Icon(Icons.play_arrow),
+                    : isDone
+                        ? const Icon(Icons.check)
+                        : const Icon(Icons.play_arrow),
                 label: Text(
                   isRunning
                       ? 'Command sent — waiting for device...'
                       : isDone
-                          ? 'Re-initialize'
+                          ? 'Initialized'
                           : 'Start Initialization',
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor:
-                      isDone ? Colors.grey.shade600 : AppColors.primary,
+                      isDone ? Colors.green.shade600 : AppColors.primary,
                   foregroundColor: Colors.white,
                 ),
               ),
             ),
             if (isRunning) ...[
               const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.06),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.blue.shade200),
-                ),
-                child: const Row(
-                  children: [
-                    SizedBox(
-                      width: 13, height: 13,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                    SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'Waiting for device to capture & upload stereo pair...',
-                        style: TextStyle(fontSize: 12, color: Colors.blue),
-                      ),
-                    ),
-                  ],
-                ),
+              const _InfoBanner(
+                icon: Icons.sync,
+                color: Colors.blue,
+                message:
+                    'Waiting for the device to capture and upload the stereo pair...',
+                showSpinner: true,
               ),
             ],
           ],
@@ -797,236 +942,245 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     );
   }
 
-  // ─── Step 2 ───────────────────────────────────────────────────────────────
-
   Widget _buildStep2Card() {
-    final canStart = _phase == _Phase.initDone;
+    final isLocked = _phase.index < _Phase.initDone.index;
     final isRunning = _phase == _Phase.alignRunning;
     final isDone = _phase.index >= _Phase.alignDone.index;
-    // Locked while Step 1 hasn't completed yet.
-    final isLocked = _phase.index < _Phase.initDone.index;
+    final canStart = _phase == _Phase.initDone && _canSendDeviceCommand;
 
     return _StepCard(
       stepNumber: 2,
       title: 'Pose Alignment',
+      subtitle:
+          'Auto-align the device against the Golden Pose. ACKs are filtered to the current session.',
       isDone: isDone,
       isActive: isRunning,
-      trailing: _acks.isNotEmpty
-          ? Text(
+      trailing: _acks.isEmpty
+          ? null
+          : Text(
               '${_acks.length} ACK',
-              style:
-                  const TextStyle(fontSize: 12, color: AppColors.textMuted),
-            )
-          : null,
+              style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+            ),
       child: Opacity(
-        opacity: isLocked ? 0.4 : 1.0,
+        opacity: isLocked ? 0.45 : 1,
         child: IgnorePointer(
           ignoring: isLocked,
           child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_alignResult != null) ...[
-            const SizedBox(height: 10),
-            _ResultChips(result: _alignResult!),
-          ],
-          if (_latestDeviation != null && isRunning) ...[
-            const SizedBox(height: 10),
-            _DeviationTile(deviation: _latestDeviation!),
-          ],
-          if (_acks.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            const Text(
-              'Loop history (newest first):',
-              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-            ),
-            const SizedBox(height: 6),
-            ..._acks.take(8).map(_buildAckTile),
-          ],
-          const SizedBox(height: 12),
-          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: canStart ? _runAlignment : null,
-                  icon: const Icon(Icons.adjust),
-                  label: const Text('Start Alignment'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: Colors.white,
-                  ),
+              if (_alignResult != null) ...[
+                _ResultChips(result: _alignResult!),
+                const SizedBox(height: 10),
+              ],
+              if (_latestDeviation != null && isRunning) ...[
+                _DeviationTile(deviation: _latestDeviation!),
+                const SizedBox(height: 10),
+              ],
+              if (_acks.isNotEmpty) ...[
+                const Text(
+                  'Loop history:',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                 ),
-              ),
-              if (isRunning || isDone) ...[
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    // Enable only after at least one alignment_complete ACK.
-                    onPressed: (isRunning && _alignmentCompletedThisSession)
-                        ? _confirmAlignmentDone
-                        : null,
-                    icon: const Icon(Icons.check_circle_outline),
-                    label: const Text('Confirm Done'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
+                const SizedBox(height: 6),
+                ..._acks.take(8).map(_buildAckTile),
+                const SizedBox(height: 8),
+              ],
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: canStart ? _runAlignment : null,
+                      icon: isDone
+                          ? const Icon(Icons.check)
+                          : const Icon(Icons.adjust),
+                      label: Text(isDone ? 'Aligned' : 'Start Alignment'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor:
+                            isDone ? Colors.green.shade600 : AppColors.primary,
+                        foregroundColor: Colors.white,
+                      ),
                     ),
                   ),
+                  if (isRunning) ...[
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: _alignmentCompletedThisSession
+                            ? _confirmAlignmentDone
+                            : null,
+                        icon: const Icon(Icons.check_circle_outline),
+                        label: const Text('Confirm Done'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              if (isRunning) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _alignmentCompletedThisSession
+                      ? 'Alignment is within tolerance. Press “Confirm Done” to continue.'
+                      : 'The device is auto-aligning. Confirmation is enabled after an alignment_complete ACK from this session.',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textMuted,
+                  ),
+                ),
+              ],
+              if (isLocked) ...[
+                const SizedBox(height: 10),
+                const _InfoBanner(
+                  icon: Icons.lock_outline,
+                  color: Colors.grey,
+                  message:
+                      'Complete Step 1 or reuse an existing Golden Pose before alignment.',
                 ),
               ],
             ],
           ),
-          if (isRunning)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                _alignmentCompletedThisSession
-                    ? 'Alignment complete \u2014 press "Confirm Done" to proceed.'
-                    : 'Device is auto-aligning in a loop. "Confirm Done" will be enabled once alignment succeeds.',
-                style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
-              ),
-            ),
-          if (isLocked)
-            Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.lock_outline, size: 15, color: Colors.grey),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Complete or skip Step 1 (Initialize Golden Pose) first.',
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
         ),
       ),
     );
   }
 
   Widget _buildAckTile(Map<String, dynamic> ack) {
-    // ACK structure from server: {topic, payload: {action, result, ts_ms, ...}, received_ts_ms}
-    final payload = ack['payload'] as Map<String, dynamic>? ?? {};
+    final payload = _asStringMap(ack['payload']);
     final action = payload['action']?.toString() ?? '?';
-    final result = payload['result'] as Map<String, dynamic>? ?? {};
-    final tsMs = ack['received_ts_ms'] as int? ?? payload['ts_ms'] as int?;
-    final ts = tsMs != null ? DateTime.fromMillisecondsSinceEpoch(tsMs).toLocal() : null;
+    final result = _asStringMap(payload['result']);
+    final statusStr = result['status']?.toString() ?? '';
+    final tsMs = _ackTimestampMs(ack);
+    final ts = tsMs > 0 ? DateTime.fromMillisecondsSinceEpoch(tsMs).toLocal() : null;
 
     const actionLabels = <String, String>{
       'capture': 'Capture',
       'move': 'Move',
-      'alignment_complete': 'Alignment Complete ✓',
-      'alignment_failed': 'Alignment Failed ✗',
-      'capture_stereo_pair': 'Stereo Capture (Golden)',
+      'alignment_complete': 'Alignment Complete',
+      'alignment_failed': 'Alignment Failed',
+      'capture_stereo_pair': 'Stereo Capture',
       'noop': 'No-op',
     };
-    final actionDisplay = actionLabels[action] ?? action;
-    final statusStr = result['status']?.toString() ?? '';
 
-    IconData statusIcon = Icons.info_outline;
-    Color statusColor = AppColors.textMuted;
-    if (statusStr == 'ok') {
-      statusIcon = action == 'alignment_complete'
-          ? Icons.check_circle
-          : Icons.check_circle_outline;
-      statusColor = action == 'alignment_complete' ? Colors.green : Colors.green.shade600;
-    } else if (statusStr == 'error') {
-      statusIcon = Icons.error_outline;
-      statusColor = Colors.red;
-    } else if (statusStr == 'ignored') {
-      statusIcon = Icons.remove_circle_outline;
-      statusColor = Colors.orange;
+    final actionDisplay = actionLabels[action] ?? action;
+    final isComplete = action == 'alignment_complete';
+    final isError = statusStr == 'error' || action == 'alignment_failed';
+    final isIgnored = statusStr == 'ignored';
+
+    final IconData icon;
+    final Color color;
+
+    if (isComplete) {
+      icon = Icons.check_circle;
+      color = Colors.green;
+    } else if (isError) {
+      icon = Icons.error_outline;
+      color = Colors.red;
+    } else if (isIgnored) {
+      icon = Icons.remove_circle_outline;
+      color = Colors.orange;
+    } else if (statusStr == 'ok') {
+      icon = Icons.check_circle_outline;
+      color = Colors.green.shade600;
+    } else {
+      icon = Icons.info_outline;
+      color = AppColors.textMuted;
     }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       decoration: BoxDecoration(
-        color: action == 'alignment_complete'
+        color: isComplete
             ? Colors.green.withOpacity(0.08)
             : AppColors.surfaceMuted,
         borderRadius: BorderRadius.circular(8),
-        border: action == 'alignment_complete'
+        border: isComplete
             ? Border.all(color: Colors.green.shade300, width: 1)
             : null,
       ),
       child: Row(
         children: [
-          Icon(statusIcon, color: statusColor, size: 16),
+          Icon(icon, color: color, size: 16),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
               actionDisplay,
               style: TextStyle(
                 fontSize: 12,
-                fontWeight: action == 'alignment_complete'
-                    ? FontWeight.bold
-                    : FontWeight.normal,
-                color: action == 'alignment_complete' ? Colors.green : null,
+                fontWeight: isComplete ? FontWeight.bold : FontWeight.normal,
+                color: isComplete ? Colors.green : null,
               ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          if (ts != null)
+          if (statusStr.isNotEmpty && !isComplete) ...[
+            const SizedBox(width: 8),
+            Text(
+              statusStr.toUpperCase(),
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: color,
+              ),
+            ),
+          ],
+          if (ts != null) ...[
+            const SizedBox(width: 8),
             Text(
               '${ts.hour.toString().padLeft(2, '0')}:'
               '${ts.minute.toString().padLeft(2, '0')}:'
               '${ts.second.toString().padLeft(2, '0')}',
               style: const TextStyle(fontSize: 11, color: AppColors.textFaint),
             ),
+          ],
         ],
       ),
     );
   }
 
-  // ─── Step 3 ───────────────────────────────────────────────────────────────
-
   Widget _buildStep3Card() {
     final isRunning = _phase == _Phase.inspectRunning;
     final isDone = _phase == _Phase.done;
+    final canRun = _phase == _Phase.alignDone && _canSendDeviceCommand;
 
     return _StepCard(
       stepNumber: 3,
       title: 'AI Artifact Inspection',
+      subtitle:
+          'Run AI analysis on the final aligned image and compare it with the reference.',
       isDone: isDone,
       isActive: isRunning,
       accentColor: Colors.orange,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Uses the final aligned image to run AI analysis against the original reference.',
-            style: TextStyle(fontSize: 13, color: AppColors.textMuted),
-          ),
           if (_inspectionResult != null) ...[
-            const SizedBox(height: 12),
             _InspectionSummary(inspection: _inspectionResult!),
+            const SizedBox(height: 12),
           ],
-          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: isRunning ? null : _runInspection,
+                  onPressed: canRun ? _runInspection : null,
                   icon: isRunning
                       ? const _SmallSpinner()
-                      : const Icon(Icons.search),
+                      : isDone
+                          ? const Icon(Icons.check)
+                          : const Icon(Icons.search),
                   label: Text(
-                      isRunning ? 'Analyzing...' : 'Run AI Inspection'),
+                    isRunning
+                        ? 'Analyzing...'
+                        : isDone
+                            ? 'Inspection Completed'
+                            : 'Run AI Inspection',
+                  ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
+                    backgroundColor:
+                        isDone ? Colors.green.shade600 : Colors.orange,
                     foregroundColor: Colors.white,
                   ),
                 ),
@@ -1055,113 +1209,10 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
   }
 }
 
-// ─── Reusable widgets ────────────────────────────────────────────────────────
-
-class _DeviationTile extends StatelessWidget {
-  final Map<String, dynamic> deviation;
-  const _DeviationTile({required this.deviation});
-
-  String _fmt(dynamic v, String unit, {int decimals = 1}) {
-    final d = (v as num?)?.toDouble() ?? 0.0;
-    return '${d.toStringAsFixed(decimals)}$unit';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final withinTol = deviation['within_tolerance'] == true;
-    final dx = _fmt(deviation['delta_x'], 'mm');
-    final dz = _fmt(deviation['delta_z'], 'mm');
-    final transMag = _fmt(deviation['translation_mag'], 'mm');
-    final dpan = _fmt(deviation['delta_pan'], '°');
-    final dtilt = _fmt(deviation['delta_tilt'], '°');
-    final rotMag = _fmt(deviation['rotation_mag'], '°');
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: withinTol ? Colors.green.withOpacity(0.07) : Colors.orange.withOpacity(0.07),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: withinTol ? Colors.green.shade300 : Colors.orange.shade300,
-          width: 1,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                withinTol ? Icons.check_circle_outline : Icons.sync,
-                size: 15,
-                color: withinTol ? Colors.green : Colors.orange,
-              ),
-              const SizedBox(width: 5),
-              Text(
-                withinTol ? 'Within tolerance' : 'Aligning...',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: withinTol ? Colors.green : Colors.orange,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Position: Δx=$dx  Δz=$dz  (total: $transMag)',
-            style: const TextStyle(fontSize: 11, fontFamily: 'monospace', letterSpacing: 0.3),
-          ),
-          Text(
-            'Angle:  Δpan=$dpan  Δtilt=$dtilt  (total: $rotMag)',
-            style: const TextStyle(fontSize: 11, fontFamily: 'monospace', letterSpacing: 0.3),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DeviceStatusBadge extends StatelessWidget {
-  final IotDevice device;
-  /// Neu duoc truyen vao, override device.isOnline (dung gia tri tu API moi nhat).
-  final bool? isOnlineOverride;
-  const _DeviceStatusBadge({required this.device, this.isOnlineOverride});
-
-  @override
-  Widget build(BuildContext context) {
-    final online = isOnlineOverride ?? device.isOnline;
-    return Container(
-      margin: const EdgeInsets.only(right: 12, top: 10, bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: online ? Colors.green.shade100 : Colors.grey.shade200,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.circle,
-              size: 8, color: online ? Colors.green : Colors.grey),
-          const SizedBox(width: 4),
-          Text(
-            online ? 'Online' : 'Offline',
-            style: TextStyle(
-              color:
-                  online ? Colors.green.shade700 : Colors.grey.shade600,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _StepCard extends StatelessWidget {
   final int stepNumber;
   final String title;
+  final String? subtitle;
   final bool isDone;
   final bool isActive;
   final Color? accentColor;
@@ -1171,6 +1222,7 @@ class _StepCard extends StatelessWidget {
   const _StepCard({
     required this.stepNumber,
     required this.title,
+    this.subtitle,
     required this.isDone,
     required this.isActive,
     this.accentColor,
@@ -1180,13 +1232,13 @@ class _StepCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color borderColor = isDone
+    final borderColor = isDone
         ? Colors.green.shade300
         : isActive
-            ? Colors.blue.shade300
+            ? (accentColor ?? Colors.blue).withOpacity(0.75)
             : AppColors.surfaceMuted;
 
-    final Color avatarColor = isDone
+    final avatarColor = isDone
         ? Colors.green
         : isActive
             ? (accentColor ?? Colors.blue)
@@ -1195,7 +1247,7 @@ class _StepCard extends StatelessWidget {
     return Card(
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: borderColor, width: 1.5),
+        side: BorderSide(color: borderColor, width: 1.4),
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -1203,6 +1255,7 @@ class _StepCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 CircleAvatar(
                   radius: 14,
@@ -1214,23 +1267,206 @@ class _StepCard extends StatelessWidget {
                           : Text(
                               '$stepNumber',
                               style: const TextStyle(
-                                  color: Colors.white, fontSize: 12),
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 15),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                        ),
+                      ),
+                      if (subtitle != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle!,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textMuted,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-                if (trailing != null) trailing!,
+                if (trailing != null) ...[
+                  const SizedBox(width: 8),
+                  trailing!,
+                ],
               ],
             ),
+            const SizedBox(height: 12),
             child,
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _InfoBanner extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String message;
+  final bool showSpinner;
+
+  const _InfoBanner({
+    required this.icon,
+    required this.color,
+    required this.message,
+    this.showSpinner = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.28)),
+      ),
+      child: Row(
+        children: [
+          if (showSpinner)
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: color),
+            )
+          else
+            Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(fontSize: 12, color: color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeviationTile extends StatelessWidget {
+  final Map<String, dynamic> deviation;
+
+  const _DeviationTile({required this.deviation});
+
+  // Translation values from the C++ solver are in metres; display as mm.
+  String _fmt(dynamic value, String unit, {int decimals = 1, double multiplier = 1.0}) {
+    final number = ((value as num?)?.toDouble() ?? 0.0) * multiplier;
+    return '${number.toStringAsFixed(decimals)}$unit';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final withinTolerance = deviation['within_tolerance'] == true;
+    final dx = _fmt(deviation['delta_x'], 'mm', multiplier: 1000.0);
+    final dz = _fmt(deviation['delta_z'], 'mm', multiplier: 1000.0);
+    final transMag = _fmt(deviation['translation_mag'], 'mm', multiplier: 1000.0);
+    final dpan = _fmt(deviation['delta_pan'], '°');
+    final dtilt = _fmt(deviation['delta_tilt'], '°');
+    final rotMag = _fmt(deviation['rotation_mag'], '°');
+
+    final color = withinTolerance ? Colors.green : Colors.orange;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                withinTolerance ? Icons.check_circle_outline : Icons.sync,
+                size: 15,
+                color: color,
+              ),
+              const SizedBox(width: 5),
+              Text(
+                withinTolerance ? 'Within tolerance' : 'Aligning...',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Position: Δx=$dx  Δz=$dz  total=$transMag',
+            style: const TextStyle(
+              fontSize: 11,
+              fontFamily: 'monospace',
+              letterSpacing: 0.3,
+            ),
+          ),
+          Text(
+            'Angle:    Δpan=$dpan  Δtilt=$dtilt  total=$rotMag',
+            style: const TextStyle(
+              fontSize: 11,
+              fontFamily: 'monospace',
+              letterSpacing: 0.3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeviceStatusBadge extends StatelessWidget {
+  final IotDevice device;
+  final bool? isOnlineOverride;
+
+  const _DeviceStatusBadge({
+    required this.device,
+    this.isOnlineOverride,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final online = isOnlineOverride ?? device.isOnline;
+    final color = online ? Colors.green : Colors.grey;
+
+    return Container(
+      margin: const EdgeInsets.only(right: 12, top: 10, bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.circle, size: 8, color: color),
+          const SizedBox(width: 4),
+          Text(
+            online ? 'Online' : 'Offline',
+            style: TextStyle(
+              color: online ? Colors.green.shade700 : Colors.grey.shade600,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1251,6 +1487,7 @@ class _SmallSpinner extends StatelessWidget {
 
 class _ResultChips extends StatelessWidget {
   final Map<String, dynamic> result;
+
   const _ResultChips({required this.result});
 
   @override
@@ -1276,14 +1513,13 @@ class _ResultChips extends StatelessWidget {
         ),
         if (mode.isNotEmpty)
           _Chip(
-              label: mode,
-              color: Colors.grey.shade600,
-              icon: Icons.settings_ethernet),
+            label: mode,
+            color: Colors.grey.shade600,
+            icon: Icons.settings_ethernet,
+          ),
         if (taskId.isNotEmpty)
           _Chip(
-            label: taskId.length > 22
-                ? '${taskId.substring(0, 22)}…'
-                : taskId,
+            label: taskId.length > 22 ? '${taskId.substring(0, 22)}…' : taskId,
             color: Colors.grey.shade500,
             icon: Icons.tag,
           ),
@@ -1297,7 +1533,11 @@ class _Chip extends StatelessWidget {
   final Color color;
   final IconData icon;
 
-  const _Chip({required this.label, required this.color, required this.icon});
+  const _Chip({
+    required this.label,
+    required this.color,
+    required this.icon,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1316,7 +1556,10 @@ class _Chip extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-                fontSize: 11, color: color, fontWeight: FontWeight.w600),
+              fontSize: 11,
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -1326,19 +1569,20 @@ class _Chip extends StatelessWidget {
 
 class _InspectionSummary extends StatelessWidget {
   final Inspection inspection;
+
   const _InspectionSummary({required this.inspection});
 
   @override
   Widget build(BuildContext context) {
     final hasAlert = inspection.status.isAlert;
-    final Color borderColor = hasAlert ? Colors.orange : Colors.green;
+    final color = hasAlert ? Colors.orange : Colors.green;
 
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: borderColor.withOpacity(0.08),
+        color: color.withOpacity(0.08),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: borderColor.withOpacity(0.3)),
+        border: Border.all(color: color.withOpacity(0.3)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -1350,11 +1594,15 @@ class _InspectionSummary extends StatelessWidget {
                     ? Icons.check_circle
                     : Icons.warning_amber,
                 size: 32,
-                color: inspection.status.isAlert ? Colors.orange : Colors.green,
+                color: color,
               ),
+              const SizedBox(height: 4),
               Text(
                 inspection.status.label,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ],
           ),
@@ -1367,6 +1615,7 @@ class _InspectionSummary extends StatelessWidget {
                 size: 28,
                 color: inspection.detections.isEmpty ? Colors.green : Colors.orange,
               ),
+              const SizedBox(height: 4),
               Text(
                 '${inspection.detections.length} region(s)',
                 style: const TextStyle(fontSize: 11),
@@ -1383,7 +1632,10 @@ class _ErrorBanner extends StatelessWidget {
   final String message;
   final VoidCallback onDismiss;
 
-  const _ErrorBanner({required this.message, required this.onDismiss});
+  const _ErrorBanner({
+    required this.message,
+    required this.onDismiss,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1399,8 +1651,10 @@ class _ErrorBanner extends StatelessWidget {
           const Icon(Icons.error_outline, color: Colors.red),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(message,
-                style: const TextStyle(color: Colors.red)),
+            child: Text(
+              message,
+              style: const TextStyle(color: Colors.red),
+            ),
           ),
           IconButton(
             icon: const Icon(Icons.close, size: 18, color: Colors.red),
