@@ -26,3 +26,8 @@ class PoseInitializeResponse(BaseModel):
     ok: bool
     message: str
     result: dict
+
+
+class GoldenPoseStatusResponse(BaseModel):
+    artifact_id: str
+    has_golden_pose: bool

@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_container
-from app.schemas.pose import PoseCorrectionResponse, PoseHealthResponse, PoseInitializeResponse
+from app.core.database import get_db
+from app.models.artifact import Artifact, Image, ImageType
+from app.schemas.pose import (
+    GoldenPoseStatusResponse,
+    PoseCorrectionResponse,
+    PoseHealthResponse,
+    PoseInitializeResponse,
+)
 from app.services.state import AppContainer
 
 logger = logging.getLogger(__name__)
@@ -48,20 +57,69 @@ async def pose_correct(
 async def initialize_golden(
     left_file: UploadFile = File(...),
     right_file: UploadFile = File(...),
+    artifact_id: str | None = Form(None),
     container: AppContainer = Depends(get_container),
+    db: Session = Depends(get_db),
 ) -> PoseInitializeResponse:
     temp_dir = container.settings.uploads_dir / "pose_init"
     left_path = await _save_temp_upload(temp_dir, left_file)
     right_path = await _save_temp_upload(temp_dir, right_file)
 
     try:
-        result = container.pose_service.initialize_golden(left_path, right_path)
+        result = container.pose_service.initialize_golden(
+            left_path, right_path, artifact_id=artifact_id or None
+        )
     except Exception as exc:
         logger.error("[initialize_golden] FAILED: %s", exc, exc_info=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Auto-extract artifact_id from filename if Pi didn't send it as form field.
+    # Pi saves files as: stereo_left_{artifact_id}_{ts_ns}.png
+    if not artifact_id:
+        match = re.search(r"stereo_left_([a-f0-9]{6})_", left_path.name)
+        if match:
+            artifact_id = match.group(1)
+            logger.info("[initialize_golden] Auto-extracted artifact_id=%s from filename", artifact_id)
+
+    # Save golden left image as artifact baseline (distinctive name)
+    if artifact_id:
+        artifact = db.query(Artifact).filter(Artifact.artifact_id == artifact_id).first()
+        if artifact:
+            ts_ms = int(time.time() * 1000)
+            golden_dir = container.settings.uploads_dir / "artifacts" / artifact_id
+            golden_dir.mkdir(parents=True, exist_ok=True)
+            golden_left_path = golden_dir / f"golden_left_{artifact_id}_{ts_ms}.png"
+            golden_left_path.write_bytes(left_path.read_bytes())
+
+            baseline_image = Image(
+                artifact_id=artifact_id,
+                image_type=ImageType.baseline,
+                image_path=str(golden_left_path),
+                is_valid=True,
+            )
+            db.add(baseline_image)
+            db.flush()
+            artifact.baseline_image_id = baseline_image.image_id
+            db.commit()
+            logger.info(
+                "[initialize_golden] Saved golden left as baseline for artifact=%s: %s",
+                artifact_id, golden_left_path.name,
+            )
+        else:
+            logger.warning("[initialize_golden] artifact_id=%s not found in DB, baseline not set", artifact_id)
 
     return PoseInitializeResponse(
         ok=True,
         message="Golden pose initialized successfully",
         result=result,
     )
+
+
+@router.get("/pose/golden-pose/{artifact_id}/status", response_model=GoldenPoseStatusResponse)
+def golden_pose_status(
+    artifact_id: str,
+    container: AppContainer = Depends(get_container),
+) -> GoldenPoseStatusResponse:
+    """Kiem tra artifact da co golden pose chua (per-artifact)."""
+    has_it = container.pose_service.has_golden_pose(artifact_id)
+    return GoldenPoseStatusResponse(artifact_id=artifact_id, has_golden_pose=has_it)

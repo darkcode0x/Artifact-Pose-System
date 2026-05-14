@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/artifact.dart';
+import '../../models/artifact_status.dart';
 import '../../providers/artifact_provider.dart';
+import '../../providers/auth_provider.dart';
 import '../../services/api_config.dart';
 import '../../theme.dart';
 import '../../widgets/responsive_scaffold.dart';
@@ -29,6 +31,12 @@ class _ArtifactListScreenState extends State<ArtifactListScreen> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<ArtifactProvider>();
+    final auth = context.watch<AuthProvider>();
+    
+    // Cả Admin và Operator đều được phép thêm Artifact
+    final canAdd = auth.status == AuthStatus.authenticated;
+
+    final displayArtifacts = provider.artifacts.where((a) => a.status != ArtifactStatus.archived).toList();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Artifacts')),
@@ -36,49 +44,51 @@ class _ArtifactListScreenState extends State<ArtifactListScreen> {
         onRefresh: () => context.read<ArtifactProvider>().refresh(),
         child: ResponsiveBody(
           padding: const EdgeInsets.all(16),
-          child: _buildBody(provider),
+          child: _buildBody(displayArtifacts, provider),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        onPressed: () async {
-          final created = await Navigator.push<bool>(
-            context,
-            MaterialPageRoute(builder: (_) => const AddArtifactScreen()),
-          );
-          if (created == true && mounted) {
-            await context.read<ArtifactProvider>().refresh();
-          }
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('New artifact'),
-      ),
+      floatingActionButton: canAdd
+          ? FloatingActionButton.extended(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              onPressed: () async {
+                final created = await Navigator.push<bool>(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AddArtifactScreen()),
+                );
+                if (created == true && mounted) {
+                  await context.read<ArtifactProvider>().refresh();
+                }
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('Add Artifact'),
+            )
+          : null,
     );
   }
 
-  Widget _buildBody(ArtifactProvider provider) {
-    if (provider.loading && provider.artifacts.isEmpty) {
+  Widget _buildBody(List<Artifact> artifacts, ArtifactProvider provider) {
+    if (provider.loading && artifacts.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (provider.error != null && provider.artifacts.isEmpty) {
+    if (provider.error != null && artifacts.isEmpty) {
       return ErrorStateView(
         message: provider.error!,
         onRetry: () => context.read<ArtifactProvider>().refresh(),
       );
     }
-    if (provider.artifacts.isEmpty) {
+    if (artifacts.isEmpty) {
       return const EmptyStateView(
         icon: Icons.inventory_2_outlined,
         title: 'No artifacts yet',
-        subtitle: 'Tap "New artifact" to add the first one.',
+        subtitle: 'Tap "Add Artifact" to create one.',
       );
     }
     return ListView.separated(
-      itemCount: provider.artifacts.length,
+      itemCount: artifacts.length,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) => _ArtifactCard(
-        artifact: provider.artifacts[index],
+        artifact: artifacts[index],
       ),
     );
   }
@@ -86,7 +96,6 @@ class _ArtifactListScreenState extends State<ArtifactListScreen> {
 
 class _ArtifactCard extends StatelessWidget {
   final Artifact artifact;
-
   const _ArtifactCard({required this.artifact});
 
   @override
@@ -99,7 +108,7 @@ class _ArtifactCard extends StatelessWidget {
           MaterialPageRoute(
             builder: (_) => ArtifactDetailScreen(artifact: artifact),
           ),
-        ),
+        ).then((_) => context.read<ArtifactProvider>().refresh()),
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Row(
@@ -115,22 +124,18 @@ class _ArtifactCard extends StatelessWidget {
                   children: [
                     Text(
                       artifact.name,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        const Icon(Icons.place_outlined,
-                            size: 14, color: AppColors.textMuted),
+                        const Icon(Icons.place_outlined, size: 14, color: AppColors.textMuted),
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
-                            artifact.location.isEmpty ? '—' : artifact.location,
+                            (artifact.location != null && artifact.location!.isNotEmpty) ? artifact.location! : '—',
                             style: const TextStyle(color: AppColors.textMuted),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -162,31 +167,19 @@ class _Thumbnail extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!hasImage || imageUrl == null || imageUrl!.isEmpty) {
       return Container(
-        width: 64,
-        height: 64,
-        decoration: BoxDecoration(
-          color: AppColors.surfaceMuted,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: const Icon(
-          Icons.image_not_supported_outlined,
-          color: AppColors.textFaint,
-        ),
+        width: 64, height: 64,
+        decoration: BoxDecoration(color: AppColors.surfaceMuted, borderRadius: BorderRadius.circular(14)),
+        child: const Icon(Icons.image_not_supported_outlined, color: AppColors.textFaint),
       );
     }
     return ClipRRect(
       borderRadius: BorderRadius.circular(14),
       child: Image.network(
         ApiConfig.resolveAssetUrl(imageUrl),
-        width: 64,
-        height: 64,
-        fit: BoxFit.cover,
+        width: 64, height: 64, fit: BoxFit.cover,
         errorBuilder: (_, __, ___) => Container(
-          width: 64,
-          height: 64,
-          color: AppColors.surfaceMuted,
-          child: const Icon(Icons.broken_image_outlined,
-              color: AppColors.textFaint),
+          width: 64, height: 64, color: AppColors.surfaceMuted,
+          child: const Icon(Icons.broken_image_outlined, color: AppColors.textFaint),
         ),
       ),
     );

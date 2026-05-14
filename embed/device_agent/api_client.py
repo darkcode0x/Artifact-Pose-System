@@ -41,7 +41,7 @@ class APIClient:
 		- O day IoT node dong vai tro client, chu dong goi API de nhan lenh.
 		- Server du kien tra ve JSON chua action, direction, angle/step.
 		"""
-		endpoint = f"/devices/{self.config.device_id}/move"
+		endpoint = f"/api/v1/devices/{self.config.device_id}/move"
 
 		try:
 			response = requests.post(
@@ -68,7 +68,7 @@ class APIClient:
 		Endpoint: POST /devices/get_device_id
 		Payload: {"machine_hash": "...", "preferred_device_id": "..."}
 		"""
-		endpoint = "/devices/get_device_id"
+		endpoint = "/api/v1/devices/get_device_id"
 		payload: Dict[str, Any] = {"machine_hash": machine_hash}
 		if preferred_device_id:
 			payload["preferred_device_id"] = preferred_device_id
@@ -141,6 +141,7 @@ class APIClient:
 		self,
 		left_path: Path,
 		right_path: Path,
+		artifact_id: Optional[str] = None,
 	) -> Optional[Dict[str, Any]]:
 		"""Upload cap anh stereo (left, right) len /pose/initialize_golden."""
 		endpoint = "/pose/initialize_golden"
@@ -156,9 +157,13 @@ class APIClient:
 					"left_file": (left_path.name, lf, "image/png"),
 					"right_file": (right_path.name, rf, "image/png"),
 				}
+				data: Dict[str, Any] = {}
+				if artifact_id:
+					data["artifact_id"] = artifact_id
 				response = requests.post(
 					self._url(endpoint),
 					files=files,
+					data=data,
 					timeout=self.config.upload_stereo_timeout_sec,
 				)
 				if not response.ok:

@@ -13,6 +13,7 @@ class AppColors {
   static const Color statusDamaged = Color(0xFFC0392B);
   static const Color statusMaintenance = Color(0xFF607D8B);
 
+  static const Color textBody = Colors.black87;
   static const Color textMuted = Colors.black54;
   static const Color textFaint = Colors.black45;
 }

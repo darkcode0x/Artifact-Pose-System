@@ -59,6 +59,8 @@ class StatusBadge extends StatelessWidget {
         return AppColors.statusDamaged;
       case ArtifactStatus.maintenance:
         return AppColors.statusMaintenance;
+      case ArtifactStatus.archived:
+        return Colors.blueGrey;
     }
   }
 }

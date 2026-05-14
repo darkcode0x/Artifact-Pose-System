@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ScheduleBase(BaseModel):
-    artifact_id: int
+    artifact_id: str # Changed to str for 6-digit ID
     scheduled_date: datetime
     scheduled_time: str = Field(default="09:00", pattern=r"^\d{2}:\d{2}$")
     operator_username: str = Field(default="", max_length=100)
@@ -28,7 +28,7 @@ class ScheduleUpdate(BaseModel):
 class ScheduleRead(ScheduleBase):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    id: str # Changed to str for 6-digit ID
     completed: bool
     created_at: datetime
     artifact_name: str | None = None

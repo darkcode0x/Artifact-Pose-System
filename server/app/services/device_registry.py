@@ -52,6 +52,13 @@ class DeviceRegistry:
         normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
         return normalized
 
+    def list_all(self) -> list[dict[str, str]]:
+        with self._lock:
+            return [
+                {"device_id": device_id, "machine_hash": machine_hash}
+                for machine_hash, device_id in self._machine_to_device.items()
+            ]
+
     def allocate_device_id(self, machine_hash: str, preferred_device_id: str | None = None) -> str:
         machine_key = machine_hash.strip()
         if not machine_key:

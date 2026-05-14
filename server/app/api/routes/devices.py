@@ -1,23 +1,130 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import time
+from typing import List
 
-from app.api.dependencies import get_container
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
+
+from app.api.dependencies import get_container, get_current_user, require_admin
+from app.core.database import get_db
+from app.models.iot_device import IotDevice, DeviceStatus
+from app.models.user import User
 from app.schemas.devices import (
     DeviceAcksResponse,
     DeviceIdRequest,
     DeviceIdResponse,
     DeviceStatusResponse,
+    DeviceSummary,
     MoveCommand,
     MoveCommandRequest,
     QueueMoveResponse,
 )
 from app.services.state import AppContainer
 
-router = APIRouter()
+router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 
 
-@router.post("/devices/get_device_id", response_model=DeviceIdResponse)
+# --------- DB-backed CRUD ---------
+
+@router.get("", response_model=List[DeviceSummary])
+def list_devices(
+    db: Session = Depends(get_db),
+    container: AppContainer = Depends(get_container),
+    _: User = Depends(get_current_user),
+) -> list[DeviceSummary]:
+    devices = db.query(IotDevice).order_by(IotDevice.created_at.desc()).all()
+    now_ms = int(time.time() * 1000)
+    _ONLINE_WINDOW_MS = 120_000  # 2 minutes — device heartbeat threshold
+    result = []
+    for d in devices:
+        # Check real-time MQTT heartbeat status (in-memory, from status/{device_id} topic)
+        rt = container.command_service.get_status(d.device_code)
+        is_online = False
+        if rt:
+            received_ts = rt.get("received_ts_ms") or 0
+            payload = rt.get("payload") or {}
+            if isinstance(payload, dict) and payload.get("status") == "online":
+                if (now_ms - received_ts) < _ONLINE_WINDOW_MS:
+                    is_online = True
+        result.append(
+            DeviceSummary(
+                device_id=d.device_id,
+                machine_hash=d.device_code,
+                status={
+                    "db_status": "online" if is_online else d.status.value,
+                    "description": d.description or "",
+                    "last_active_at": d.last_active_at.isoformat() if d.last_active_at else None,
+                },
+            )
+        )
+    return result
+
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+def create_device(
+    device_code: str,
+    description: str = "",
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    existing = db.query(IotDevice).filter(IotDevice.device_code == device_code).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Device code already exists")
+
+    new_device = IotDevice(
+        device_code=device_code,
+        description=description,
+        status=DeviceStatus.offline,
+    )
+    db.add(new_device)
+    db.commit()
+    db.refresh(new_device)
+    return {"ok": True, "device_id": new_device.device_id, "message": "Device created successfully"}
+
+
+@router.patch("/{device_id}")
+def update_device(
+    device_id: str,
+    description: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    device = db.query(IotDevice).filter(IotDevice.device_id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    if description is not None:
+        device.description = description
+    if status is not None:
+        try:
+            device.status = DeviceStatus(status.lower())
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+
+    db.commit()
+    return {"ok": True, "message": "Device updated successfully"}
+
+
+@router.delete("/{device_id}", status_code=204)
+def delete_device(
+    device_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> None:
+    device = db.query(IotDevice).filter(IotDevice.device_id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    db.delete(device)
+    db.commit()
+
+
+# --------- IoT operational endpoints (used by Raspberry Pi clients) ---------
+# These endpoints don't require auth so devices on the local network can register
+# and poll commands. If you want to lock them down, wire in get_current_user.
+
+@router.post("/get_device_id", response_model=DeviceIdResponse)
 def get_device_id(
     req: DeviceIdRequest,
     container: AppContainer = Depends(get_container),
@@ -37,7 +144,7 @@ def get_device_id(
     )
 
 
-@router.post("/devices/{device_id}/queue_move", response_model=QueueMoveResponse)
+@router.post("/{device_id}/queue_move", response_model=QueueMoveResponse)
 def queue_move(
     device_id: str,
     cmd: MoveCommand,
@@ -49,7 +156,6 @@ def queue_move(
 
     published, publish_result = container.mqtt_bridge.publish_command(device_id, payload)
     queued = 0
-
     if not published:
         queued = container.command_service.queue_command(device_id, payload)
 
@@ -64,7 +170,7 @@ def queue_move(
     )
 
 
-@router.post("/devices/{device_id}/move", response_model=MoveCommand)
+@router.post("/{device_id}/move", response_model=MoveCommand)
 def poll_move_command(
     device_id: str,
     req: MoveCommandRequest | None = None,
@@ -72,12 +178,11 @@ def poll_move_command(
 ) -> MoveCommand:
     if req is not None and req.device_id != device_id:
         raise HTTPException(status_code=400, detail="device_id mismatch")
-
     payload = container.command_service.pop_next_command(device_id)
     return MoveCommand(**payload)
 
 
-@router.get("/devices/{device_id}/status", response_model=DeviceStatusResponse)
+@router.get("/{device_id}/status", response_model=DeviceStatusResponse)
 def device_status(
     device_id: str,
     container: AppContainer = Depends(get_container),
@@ -89,7 +194,7 @@ def device_status(
     )
 
 
-@router.get("/devices/{device_id}/acks", response_model=DeviceAcksResponse)
+@router.get("/{device_id}/acks", response_model=DeviceAcksResponse)
 def device_acks(
     device_id: str,
     limit: int = Query(default=20, ge=1, le=200),

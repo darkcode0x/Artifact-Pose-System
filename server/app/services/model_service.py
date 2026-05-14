@@ -77,7 +77,7 @@ class UltralyticsYoloRuntimeModel(BaseRuntimeModel):
         results = self._model.predict(
             image,
             imgsz=self._imgsz,
-            conf=0.25,
+            conf=0.15,
             iou=0.5,
             verbose=False,
         )

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from .common import (
     DATA_DIR,
@@ -102,10 +105,13 @@ def run_initialization(
 ) -> dict[str, Any] | None:
     diamond = detect_diamond(image_left, K, D)
     if diamond is None:
+        logger.error("[initialize_golden] Diamond marker NOT detected in left image.")
         return None
 
+    logger.info("[initialize_golden] Diamond detected OK, extracting ORB features...")
     kp_left, desc_left, _ = extract_orb(image_left)
     kp_right, desc_right, _ = extract_orb(image_right)
+    logger.info("[initialize_golden] ORB: left=%d kp, right=%d kp", len(kp_left), len(kp_right))
 
     pts3d, pts2d, matched_desc, _ = match_and_triangulate(
         desc_left,
@@ -117,8 +123,15 @@ def run_initialization(
         STEREO_BASELINE,
     )
 
-    if pts3d is None or len(pts3d) < 10:
+    if pts3d is None or len(pts3d) < 5:
+        got = 0 if pts3d is None else len(pts3d)
+        logger.error(
+            "[initialize_golden] Stereo triangulation failed: only %d valid 3D points (need >=5).",
+            got,
+        )
         return None
+
+    logger.info("[initialize_golden] Triangulated %d 3D points OK", len(pts3d))
 
     diamond_2d_undist = cv2.undistortPoints(
         diamond["corners"].reshape(-1, 1, 2).astype(np.float64), K, D, P=K

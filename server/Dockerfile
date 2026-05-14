@@ -21,7 +21,7 @@ RUN git clone --depth 1 --branch 20230806_git \
         -DG2O_BUILD_EXAMPLES=OFF \
         -DG2O_BUILD_APPS=OFF \
         -DG2O_USE_OPENGL=OFF \
-    && cmake --build /tmp/g2o/build --parallel "$(nproc)" \
+    && cmake --build /tmp/g2o/build --parallel "$(( $(nproc) / 2 < 2 ? 2 : $(nproc) / 2 ))" \
     && cmake --install /tmp/g2o/build \
     && sed -i '/find_dependency.*OpenGL/d' /usr/local/lib/cmake/g2o/g2oConfig.cmake \
     && ldconfig \
@@ -33,7 +33,7 @@ WORKDIR /build
 COPY native/pose_solver_cpp/ ./pose_solver_cpp/
 
 RUN cmake -S pose_solver_cpp -B pose_solver_cpp/build \
-    && cmake --build pose_solver_cpp/build --parallel "$(nproc)"
+    && cmake --build pose_solver_cpp/build --parallel "$(( $(nproc) / 2 < 2 ? 2 : $(nproc) / 2 ))"
 
 ###############################################################################
 # Stage 2: Runtime
