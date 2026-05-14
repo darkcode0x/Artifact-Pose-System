@@ -244,7 +244,14 @@ class MainApp:
         self._mqtt_client = self._build_mqtt_client()
 
     def _build_mqtt_client(self) -> Any:
-        client = self._mqtt_module.Client(client_id=f"pi-node-{self.config.device_id}")
+        # paho-mqtt v2.x yeu cau CallbackAPIVersion; fallback cho v1.x.
+        try:
+            client = self._mqtt_module.Client(
+                callback_api_version=self._mqtt_module.CallbackAPIVersion.VERSION2,
+                client_id=f"pi-node-{self.config.device_id}",
+            )
+        except AttributeError:
+            client = self._mqtt_module.Client(client_id=f"pi-node-{self.config.device_id}")
         if self.config.mqtt_username:
             client.username_pw_set(
                 username=self.config.mqtt_username,
