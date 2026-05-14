@@ -417,7 +417,7 @@ PYBIND11_MODULE(pose_solver_cpp, m) {
     py::arg("rot_tolerance")    = 1.0,     // 1.0 degree (== servo min step)
     py::arg("servo_min_deg")    = 1.0,     // Servo hardware minimum step
     py::arg("sequential_mode")  = true,    // Translation-first priority
-    py::arg("steps_per_mm")     = 860.0,   // Stepper motor steps/mm
+    py::arg("steps_per_mm")     = 800.0,   // Stepper motor steps/mm
     "Calculate pose deviation and motor command.\n"
     "Rotation commands are rounded to nearest servo_min_deg step;\n"
     "angles in the dead zone (< 0.5*servo_min_deg) are zeroed.\n"

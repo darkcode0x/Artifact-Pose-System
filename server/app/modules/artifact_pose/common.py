@@ -86,7 +86,7 @@ ROT_TOLERANCE = float(os.environ.get("ROT_TOLERANCE_DEG", "1.0"))               
 # Motor hardware constants
 SERVO_MIN_DEG = 1.0      # Minimum servo rotation step (degrees)
 SEQUENTIAL_MODE = True   # Translation first, rotation on next iteration
-STEPS_PER_MM = float(os.environ.get("STEPS_PER_MM", "860.0"))  # Stepper motor steps per mm
+STEPS_PER_MM = float(os.environ.get("STEPS_PER_MM", "800.0"))  # Stepper motor steps per mm
 
 
 def _as_path(value: str | Path | None, default: Path) -> Path:

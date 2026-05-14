@@ -138,7 +138,7 @@ class ApiClient {
     required String deviceId,
     required String artifactId,
     double baselineMm = 100.0,
-    double stepsPerMm = 860.0,
+    double stepsPerMm = 800.0,
   }) async {
     final res = await post(
       '/workflows/$deviceId/start-initialization',

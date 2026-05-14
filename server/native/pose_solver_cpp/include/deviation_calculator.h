@@ -38,7 +38,7 @@ struct DeviationConfig {
                                     // than half this are zeroed (dead zone)
     bool sequentialMode = true;     // If true: when both trans+rot needed, send
                                     // translation first; rotation on next iteration
-    double stepsPerMm = 860.0;      // Stepper motor steps per mm
+    double stepsPerMm = 800.0;      // Stepper motor steps per mm
 };
 
 class DeviationCalculator {
@@ -103,7 +103,7 @@ struct MotorCommand {
 //   only translation is sent this step (rotation deferred to next iteration).
 MotorCommand deviationToMotorCommand(
     const PoseDeviation& dev,
-    double stepsPerMm    = 860.0,  // Stepper motor steps/mm
+    double stepsPerMm    = 800.0,  // Stepper motor steps/mm
     double servoMinDeg   = 1.0,    // Minimum servo step (degrees)
     bool   sequentialMode = true   // Translation-first priority
 );
