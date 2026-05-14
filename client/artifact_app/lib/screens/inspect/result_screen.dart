@@ -88,6 +88,10 @@ class ResultScreen extends StatelessWidget {
             ),
           ],
           bottom: const TabBar(
+            labelColor: Colors.white,
+            unselectedLabelColor: Colors.white60,
+            indicatorColor: Colors.white,
+            indicatorWeight: 3,
             tabs: [
               Tab(icon: Icon(Icons.compare_outlined), text: 'Visual Review'),
               Tab(icon: Icon(Icons.manage_search_outlined), text: 'Damage Detection'),

@@ -26,6 +26,8 @@ enum _Phase {
   done,
 }
 
+enum _AlignmentFailAction { retry, continueAnyway }
+
 class DeviceWorkflowScreen extends StatefulWidget {
   /// Opened from DeviceListScreen: [device] is already known.
   /// Opened from ArtifactDetailScreen: [device] is null and must be selected.
@@ -98,6 +100,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
 
   int? _initStartTs;
   int? _alignmentStartTs;
+  (int, int)? _alignmentIteration; // (current, max) for live progress display
 
   bool _hasGoldenPose = false;
   bool _checkingGoldenPose = false;
@@ -120,6 +123,24 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
         final payload = _asStringMap(ack['payload']);
         return payload['action'] == 'alignment_complete';
       });
+
+  bool get _alignmentFailedThisSession => _acks.any((ack) {
+        final payload = _asStringMap(ack['payload']);
+        return payload['action'] == 'alignment_failed';
+      });
+
+  String? get _alignmentFailReason {
+    for (final ack in _acks) {
+      final payload = _asStringMap(ack['payload']);
+      if (payload['action'] == 'alignment_failed') {
+        // Reason is echoed by Pi inside the 'result' sub-object.
+        // Fallback to top-level 'reason' for safety.
+        final result = _asStringMap(payload['result']);
+        return (result['reason'] ?? payload['reason'])?.toString();
+      }
+    }
+    return null;
+  }
 
   String get _cacheKey =>
       widget.preselectedArtifactId ?? _effectiveDevice?.deviceCode ?? '';
@@ -345,6 +366,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       _latestDeviation = null;
       _acks = [];
       _alignmentStartTs = DateTime.now().millisecondsSinceEpoch;
+      _alignmentIteration = null;
     });
     _persistState();
     _startAlignPoll();
@@ -481,6 +503,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       _acks = [];
       _initStartTs = null;
       _alignmentStartTs = null;
+      _alignmentIteration = null;
     });
 
     final artifactId = _selectedArtifact?.id;
@@ -564,12 +587,46 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
 
       setState(() => _acks = currentAcks);
 
+      // Auto-stop polling when alignment failed (detected via ACK) and show user dialog.
+      if (_alignmentFailedThisSession && _phase == _Phase.alignRunning) {
+        _stopPoll(refreshDevice: false);
+        final reason = _alignmentFailReason;
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _handleAlignmentFailed(reason),
+        );
+        _persistState();
+        return;
+      }
+
       try {
         final meta = await _workflowService.getLatestMetadata(deviceCode);
         final metadata = _asStringMap(meta['metadata']);
+
+        // Metadata fallback: detect failure even if MQTT ACK was not received
+        // (e.g. Pi offline or MQTT not available).
+        final alignStatus = metadata['alignment_status']?.toString();
+        if (alignStatus == 'failed' && _phase == _Phase.alignRunning) {
+          _stopPoll(refreshDevice: false);
+          final reason = metadata['alignment_fail_reason']?.toString();
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _handleAlignmentFailed(reason),
+          );
+          _persistState();
+          return;
+        }
+
         final deviation = _asStringMap(metadata['pose_deviation']);
         if (mounted && deviation.isNotEmpty) {
           setState(() => _latestDeviation = deviation);
+        }
+
+        // Show live iteration progress.
+        final iter = metadata['alignment_iteration'];
+        final maxIter = metadata['alignment_max_iterations'];
+        if (mounted && iter != null) {
+          final iterInt = (iter as num).toInt();
+          final maxInt = maxIter != null ? (maxIter as num).toInt() : 20;
+          setState(() => _alignmentIteration = (iterInt, maxInt));
         }
       } catch (_) {}
 
@@ -579,6 +636,95 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
     } finally {
       _pollInFlight = false;
     }
+  }
+
+  void _handleAlignmentFailed(String? reason) {
+    if (!mounted || _phase != _Phase.alignRunning) return;
+    showDialog<_AlignmentFailAction>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orange),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Camera Positioning Failed',
+                style: TextStyle(fontSize: 16),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.withOpacity(0.4)),
+              ),
+              child: Text(
+                reason ?? 'The camera could not be precisely positioned.',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'The camera has been moved to the closest estimated position '
+              'based on the Diamond ArUco reference marker.\n\n'
+              'You can:\n'
+              '• Check that the Diamond ArUco marker is visible and well-lit, then retry.\n'
+              '• Or proceed with the current camera position — the inspection will still '    
+              'run, and the similarity score (SSIM) will reflect any remaining offset.',
+              style: TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: () => Navigator.of(ctx).pop(_AlignmentFailAction.retry),
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('Check & Retry'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.of(ctx).pop(_AlignmentFailAction.continueAnyway),
+            icon: const Icon(Icons.arrow_forward, size: 16),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.white,
+            ),
+            label: const Text('Proceed to Inspection'),
+          ),
+        ],
+      ),
+    ).then((action) {
+      if (!mounted) return;
+      if (action == _AlignmentFailAction.continueAnyway) {
+        setState(() {
+          _phase = _Phase.alignDone;
+          _errorMessage =
+              'Camera positioning was not fully accurate. '
+              'The inspection will proceed — the similarity score may reflect the offset.';
+        });
+      } else {
+        // Retry: go back so the user can re-start alignment
+        setState(() {
+          _phase = _Phase.initDone;
+          _alignmentStartTs = null;
+          _acks = [];
+          _latestDeviation = null;
+          _alignmentIteration = null;
+          _errorMessage =
+              'Please verify the Diamond ArUco marker is clearly visible and well-lit, '
+              'then press "Start Camera Alignment" again.';
+        });
+      }
+      _persistState();
+    });
   }
 
   void _stopPoll({bool refreshDevice = true}) {
@@ -855,9 +1001,9 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
 
     return _StepCard(
       stepNumber: 1,
-      title: 'Initialize Golden Pose',
+      title: 'Set Up Reference Image',
       subtitle:
-          'Capture the reference stereo pair. Baseline is fixed at ${_baselineMm.toStringAsFixed(0)} mm.',
+          'Capture the artifact’s reference stereo pair. Required once per artifact or after repositioning.',
       isDone: isDone,
       isActive: isRunning,
       child: Column(
@@ -872,7 +1018,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
               icon: Icons.check_circle_outline,
               color: Colors.green,
               message:
-                  'Golden Pose already exists for this artifact. You can reuse it and skip initialization.',
+                  'Reference image already exists for this artifact. You can reuse it and skip to alignment.',
             ),
             const SizedBox(height: 10),
             Row(
@@ -881,7 +1027,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                   child: OutlinedButton.icon(
                     onPressed: canStart ? _runInitialization : null,
                     icon: const Icon(Icons.refresh, size: 16),
-                    label: const Text('Re-initialize'),
+                    label: const Text('Recapture Reference'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.orange,
                       side: const BorderSide(color: Colors.orange),
@@ -893,7 +1039,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                   child: ElevatedButton.icon(
                     onPressed: _canSendDeviceCommand ? _skipInitialization : null,
                     icon: const Icon(Icons.skip_next),
-                    label: const Text('Use Existing Pose'),
+                    label: const Text('Use Existing Reference'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
@@ -914,10 +1060,10 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                         : const Icon(Icons.play_arrow),
                 label: Text(
                   isRunning
-                      ? 'Command sent — waiting for device...'
+                      ? 'Capturing… waiting for device'
                       : isDone
-                          ? 'Initialized'
-                          : 'Start Initialization',
+                          ? 'Reference Captured'
+                          : 'Capture Reference Image',
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor:
@@ -950,17 +1096,26 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
 
     return _StepCard(
       stepNumber: 2,
-      title: 'Pose Alignment',
+      title: 'Camera Alignment',
       subtitle:
-          'Auto-align the device against the Golden Pose. ACKs are filtered to the current session.',
+          'Automatically position the camera to match the reference angle using the Diamond ArUco marker.',
       isDone: isDone,
       isActive: isRunning,
-      trailing: _acks.isEmpty
-          ? null
-          : Text(
-              '${_acks.length} ACK',
-              style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
-            ),
+      trailing: isRunning && _alignmentIteration != null
+          ? Text(
+              'Step ${_alignmentIteration!.$1} / ${_alignmentIteration!.$2}',
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.textMuted,
+                fontWeight: FontWeight.w600,
+              ),
+            )
+          : _acks.isNotEmpty
+              ? Text(
+                  '${_acks.length} step(s)',
+                  style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+                )
+              : null,
       child: Opacity(
         opacity: isLocked ? 0.45 : 1,
         child: IgnorePointer(
@@ -978,7 +1133,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
               ],
               if (_acks.isNotEmpty) ...[
                 const Text(
-                  'Loop history:',
+                  'Adjustment history:',
                   style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                 ),
                 const SizedBox(height: 6),
@@ -993,7 +1148,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                       icon: isDone
                           ? const Icon(Icons.check)
                           : const Icon(Icons.adjust),
-                      label: Text(isDone ? 'Aligned' : 'Start Alignment'),
+                      label: Text(isDone ? 'Aligned' : 'Start Camera Alignment'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor:
                             isDone ? Colors.green.shade600 : AppColors.primary,
@@ -1023,8 +1178,8 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                 const SizedBox(height: 8),
                 Text(
                   _alignmentCompletedThisSession
-                      ? 'Alignment is within tolerance. Press “Confirm Done” to continue.'
-                      : 'The device is auto-aligning. Confirmation is enabled after an alignment_complete ACK from this session.',
+                      ? 'Camera is in position. Press "Confirm Done" to proceed to inspection.'
+                      : 'The camera is being automatically repositioned. Please wait…',
                   style: const TextStyle(
                     fontSize: 11,
                     color: AppColors.textMuted,
@@ -1037,7 +1192,7 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
                   icon: Icons.lock_outline,
                   color: Colors.grey,
                   message:
-                      'Complete Step 1 or reuse an existing Golden Pose before alignment.',
+                      'Complete Step 1 (or use an existing reference) to enable alignment.',
                 ),
               ],
             ],
