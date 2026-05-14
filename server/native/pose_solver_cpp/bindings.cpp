@@ -413,8 +413,8 @@ PYBIND11_MODULE(pose_solver_cpp, m) {
     },
     py::arg("rvec_golden"), py::arg("tvec_golden"),
     py::arg("rvec_current"), py::arg("tvec_current"),
-    py::arg("trans_tolerance")  = 0.010,   // 10mm
-    py::arg("rot_tolerance")    = 1.0,     // 1.0 degree (== servo min step)
+    py::arg("trans_tolerance")  = 0.030,   // 30mm
+    py::arg("rot_tolerance")    = 3.0,     // 3.0 degrees
     py::arg("servo_min_deg")    = 1.0,     // Servo hardware minimum step
     py::arg("sequential_mode")  = true,    // Translation-first priority
     py::arg("steps_per_mm")     = 800.0,   // Stepper motor steps/mm

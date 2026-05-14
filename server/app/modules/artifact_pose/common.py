@@ -80,8 +80,8 @@ DIAMOND_OBJ_PTS = np.array(
     dtype=np.float32,
 )
 
-TRANS_TOLERANCE = float(os.environ.get("TRANS_TOLERANCE_MM", "10.0")) / 1000.0  # env in mm, stored in m
-ROT_TOLERANCE = float(os.environ.get("ROT_TOLERANCE_DEG", "1.0"))               # degrees
+TRANS_TOLERANCE = float(os.environ.get("TRANS_TOLERANCE_MM", "30.0")) / 1000.0  # env in mm, stored in m
+ROT_TOLERANCE = float(os.environ.get("ROT_TOLERANCE_DEG", "3.0"))               # degrees
 
 # Motor hardware constants
 SERVO_MIN_DEG = 1.0      # Minimum servo rotation step (degrees)

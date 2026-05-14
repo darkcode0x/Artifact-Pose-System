@@ -30,8 +30,8 @@ struct PoseDeviation {
 };
 
 struct DeviationConfig {
-    double transTolerance = 0.010;  // 10mm — relaxed to match hardware precision
-    double rotTolerance = 1.0;      // 1.0 deg — must be >= servo minimum step
+    double transTolerance = 0.030;  // 30mm — relaxed to match hardware precision
+    double rotTolerance = 3.0;      // 3.0 deg — relaxed to allow convergence
 
     // Motor hardware constraints
     double servoMinDeg = 1.0;       // Minimum servo step (degrees); angles smaller
@@ -105,7 +105,9 @@ MotorCommand deviationToMotorCommand(
     const PoseDeviation& dev,
     double stepsPerMm    = 800.0,  // Stepper motor steps/mm
     double servoMinDeg   = 1.0,    // Minimum servo step (degrees)
-    bool   sequentialMode = true   // Translation-first priority
+    bool   sequentialMode = true,  // Translation-first priority
+    double transTolerance = 0.030, // 30mm
+    double rotTolerance   = 3.0    // 3.0 deg
 );
 
 #endif
