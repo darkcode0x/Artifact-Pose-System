@@ -123,7 +123,9 @@ MotorCommand deviationToMotorCommand(
     const PoseDeviation& dev,
     double stepsPerMm,
     double servoMinDeg,
-    bool   sequentialMode
+    bool   sequentialMode,
+    double transTolerance,
+    double rotTolerance
 ) {
     MotorCommand cmd;
 
@@ -137,9 +139,9 @@ MotorCommand deviationToMotorCommand(
     cmd.rotatePan  = applyServoConstraint(dev.deltaPan,  servoMinDeg);
     cmd.rotateTilt = applyServoConstraint(dev.deltaTilt, servoMinDeg);
 
-    // --- Priority ---
-    bool needTrans = !dev.withinTransTolerance;
-    bool needRot   = !dev.withinRotTolerance;
+    // --- Priority (re-evaluate using caller-supplied tolerances) ---
+    bool needTrans = (dev.translationMag >= transTolerance);
+    bool needRot   = (dev.rotationMag   >= rotTolerance);
 
     if (!needTrans && !needRot) {
         cmd.priority = 0;   // ALIGNED

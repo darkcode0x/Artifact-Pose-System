@@ -481,7 +481,7 @@ scrcpy
 ## Trên WSL - init:
 curl -X POST http://localhost:8000/workflows/dev-bbb742d369/start-initialization \
   -H "Content-Type: application/json" \
-  -d '{"artifact_id":"artifact_demo_001","baseline_mm":100.0,"steps_per_mm":860.0}'
+  -d '{"artifact_id":"artifact_demo_001","baseline_mm":100.0,"steps_per_mm":800.0}'
 
 ## Dịch vật thể:
 curl -X POST http://localhost:8000/workflows/dev-bbb742d369/start-alignment \

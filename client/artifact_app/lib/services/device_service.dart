@@ -19,9 +19,36 @@ class DeviceService {
   }
 
   /// `GET /api/v1/devices/{id}/status` — runtime status (in-memory command service).
+  /// Returns an [IotDevice] whose [IotDevice.isOnline] reflects the live MQTT
+  /// heartbeat (same 2-minute window the list endpoint uses server-side).
   Future<IotDevice> getStatus(String deviceId) async {
     final body = await _api.get('/api/v1/devices/$deviceId/status');
-    return IotDevice.fromJson(body as Map<String, dynamic>);
+    final map = body as Map<String, dynamic>;
+
+    // Response shape: {ok, device_id, status: {topic, payload: {status: "online",...}, received_ts_ms}}
+    // IotDevice.fromJson expects db_status inside the status map, which is NOT
+    // present here — so we compute isOnline ourselves using the same 2-minute
+    // heartbeat window the server uses for the list endpoint.
+    const onlineWindowMs = 120000;
+    bool isOnline = false;
+    final statusData = map['status'];
+    if (statusData is Map<String, dynamic>) {
+      final payload = statusData['payload'];
+      final receivedTs = statusData['received_ts_ms'];
+      if (payload is Map<String, dynamic> &&
+          payload['status'] == 'online' &&
+          receivedTs is int) {
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+        if (nowMs - receivedTs < onlineWindowMs) isOnline = true;
+      }
+    }
+
+    return IotDevice(
+      deviceId: map['device_id']?.toString() ?? deviceId,
+      deviceCode: deviceId,
+      status: isOnline ? DeviceStatus.online : DeviceStatus.offline,
+      createdAt: DateTime.now(),
+    );
   }
 
   /// `POST /api/v1/devices` — admin/operator creates device. Backend uses query params.

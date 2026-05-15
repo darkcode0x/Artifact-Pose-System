@@ -520,6 +520,56 @@ class InspectionService:
         correction_dispatch: dict[str, Any] | None = None
         workflow: dict[str, Any] = calibration_data.get("workflow", {}) if isinstance(calibration_data, dict) else {}
         auto_alignment_loop: bool = isinstance(workflow, dict) and bool(workflow.get("auto_alignment_loop", False))
+
+        # ── Alignment iteration guard ────────────────────────────────────────
+        # Each upload during an active alignment loop counts as one iteration.
+        # Stop and notify if the limit is exceeded.
+        alignment_key = f"{device_id}:{artifact_id}"
+        if auto_alignment_loop and device_id:
+            self._alignment_counters[alignment_key] = self._alignment_counters.get(alignment_key, 0) + 1
+            current_iter = self._alignment_counters[alignment_key]
+            max_iter = self._settings.max_alignment_iterations
+            capture_metadata["alignment_iteration"] = current_iter
+            capture_metadata["alignment_max_iterations"] = max_iter
+            self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
+
+            if current_iter > max_iter:
+                reason = (
+                    f"Alignment did not converge after {max_iter} iterations. "
+                    "Please verify the Diamond ArUco marker is clearly visible and well-lit, "
+                    "then retry alignment."
+                )
+                logger.warning(
+                    "[alignment] Max iterations exceeded for device=%s artifact=%s (iter=%d/%d)",
+                    device_id, artifact_id, current_iter, max_iter,
+                )
+                capture_metadata["alignment_status"] = "failed"
+                capture_metadata["alignment_fail_reason"] = reason
+                self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
+                self._alignment_counters.pop(alignment_key, None)
+                self._alignment_start_ts.pop(alignment_key, None)
+                failed_payload: dict[str, Any] = {
+                    "action": "alignment_failed",
+                    "task_id": self._command_service.build_task_id(),
+                    "artifact_id": artifact_id,
+                    "device_id": device_id,
+                    "reason": reason,
+                    "iteration": current_iter,
+                    "workflow": workflow,
+                }
+                self._mqtt_bridge.publish_command(device_id, failed_payload)
+                return {
+                    "ok": True,
+                    "message": f"Alignment stopped: {reason}",
+                    "saved_file": saved_path.name,
+                    "size_bytes": size_bytes,
+                    "pose_result": None,
+                    "correction_dispatch": {"status": "alignment_failed", "reason": reason},
+                    "ai_result": None,
+                }
+        else:
+            current_iter = 0
+
         try:
             pose_result = self._pose_service.correct_image(
                 saved_path, artifact_id=artifact_id or None
@@ -560,11 +610,20 @@ class InspectionService:
                     correction_dispatch = {
                         "status": "published" if published else "queued",
                         "info": result_info,
+                        "alignment_iteration": current_iter,
                     }
+                    if auto_alignment_loop:
+                        capture_metadata["alignment_status"] = "correcting"
+                        self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
             elif auto_alignment_loop and device_id:
                 if deviation is None:
-                    # Diamond/marker not detected — retry capture
-                    logger.warning(f"[alignment] No pose detected for device={device_id}, retrying capture")
+                    # Diamond/marker not detected — retry capture (still within iteration budget)
+                    logger.warning(
+                        "[alignment] No Diamond ArUco detected for device=%s (iter=%d/%d), retrying",
+                        device_id, current_iter, self._settings.max_alignment_iterations,
+                    )
+                    capture_metadata["alignment_status"] = "no_diamond"
+                    self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
                     retry_payload: dict[str, Any] = {
                         "action": "capture",
                         "task_id": self._command_service.build_task_id(),
@@ -580,7 +639,12 @@ class InspectionService:
                     }
                 else:
                     # within_tolerance=True — alignment complete, save final aligned image
-                    logger.info(f"[alignment] Pose within tolerance for device={device_id}, artifact={artifact_id}")
+                    logger.info(
+                        "[alignment] Pose within tolerance for device=%s artifact=%s (iter=%d)",
+                        device_id, artifact_id, current_iter,
+                    )
+                    self._alignment_counters.pop(alignment_key, None)
+                    self._alignment_start_ts.pop(alignment_key, None)
 
                     # Copy last captured image to distinctive final_aligned filename
                     if artifact_id:
@@ -590,8 +654,11 @@ class InspectionService:
                         final_path = final_dir / f"final_aligned_{artifact_id}_{ts_final}.png"
                         final_path.write_bytes(saved_path.read_bytes())
                         capture_metadata["final_aligned_path"] = str(final_path)
-                        self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
-                        logger.info(f"[alignment] Saved final aligned image: {final_path.name}")
+                        logger.info("[alignment] Saved final aligned image: %s", final_path.name)
+
+                    capture_metadata["alignment_status"] = "complete"
+                    capture_metadata["alignment_total_iterations"] = current_iter
+                    self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
 
                     complete_payload: dict[str, Any] = {
                         "action": "alignment_complete",
@@ -599,6 +666,7 @@ class InspectionService:
                         "artifact_id": artifact_id,
                         "device_id": device_id,
                         "deviation": deviation,
+                        "total_iterations": current_iter,
                         "workflow": workflow,
                     }
                     published, result_info = self._mqtt_bridge.publish_command(device_id, complete_payload)
@@ -607,18 +675,24 @@ class InspectionService:
                         "info": result_info,
                     }
         except Exception as exc:
-            logger.warning(f"Pose correction skipped for device={device_id}: {exc}")
+            logger.warning("Pose correction skipped for device=%s: %s", device_id, exc)
             if auto_alignment_loop and device_id:
-                # Notify device that alignment failed so it stops waiting
-                failed_payload: dict[str, Any] = {
+                reason = str(exc)
+                capture_metadata["alignment_status"] = "failed"
+                capture_metadata["alignment_fail_reason"] = reason
+                self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
+                self._alignment_counters.pop(alignment_key, None)
+                self._alignment_start_ts.pop(alignment_key, None)
+                # Notify device that alignment failed so it stops immediately
+                exc_failed_payload: dict[str, Any] = {
                     "action": "alignment_failed",
                     "task_id": self._command_service.build_task_id(),
                     "artifact_id": artifact_id,
                     "device_id": device_id,
-                    "reason": str(exc),
+                    "reason": reason,
                     "workflow": workflow,
                 }
-                self._mqtt_bridge.publish_command(device_id, failed_payload)
+                self._mqtt_bridge.publish_command(device_id, exc_failed_payload)
 
         return {
             "ok": True,

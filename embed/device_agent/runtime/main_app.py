@@ -797,7 +797,7 @@ class MainApp:
     def _handle_capture_stereo_pair(self, command: Dict[str, Any]) -> None:
         """Chup cap anh stereo: left → di chuyen slider X → right → quay lai → upload."""
         artifact_id = str(command.get("artifact_id", self.config.default_artifact_id))
-        baseline_steps = int(command.get("baseline_steps", 86000))
+        baseline_steps = int(command.get("baseline_steps", 80000))
         lens_position = float(command.get("lens_position", self.config.lens_position))
         ts = time.time_ns()
 
