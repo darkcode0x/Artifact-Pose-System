@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from app.api.dependencies import get_container
+from app.api.dependencies import get_container, get_current_user
 from app.schemas.workflow import (
     CaptureRequest,
     LatestCaptureMetadataResponse,
@@ -15,7 +15,11 @@ from app.schemas.workflow import (
 )
 from app.services.state import AppContainer
 
-router = APIRouter()
+FIXED_STEREO_BASELINE_MM = 100.0
+FIXED_STEPS_PER_MM = 800.0
+FIXED_STEREO_BASELINE_STEPS = int(round(FIXED_STEREO_BASELINE_MM * FIXED_STEPS_PER_MM))
+
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 def _extract_lens_from_metadata(latest_metadata: dict[str, Any]) -> float | None:
@@ -173,15 +177,14 @@ def start_initialization(
     req: StartInitializationRequest,
     container: AppContainer = Depends(get_container),
 ) -> TriggerCommandResponse:
-    baseline_steps = int(round(req.baseline_mm * req.steps_per_mm))
-
     payload: dict[str, Any] = {
         "action": "capture_stereo_pair",
         "task_id": container.command_service.build_task_id(),
         "artifact_id": req.artifact_id,
-        "baseline_steps": baseline_steps,
-        "baseline_mm": req.baseline_mm,
-        "steps_per_mm": req.steps_per_mm,
+        "baseline_steps": FIXED_STEREO_BASELINE_STEPS,
+        "baseline_mm": FIXED_STEREO_BASELINE_MM,
+        "steps_per_mm": FIXED_STEPS_PER_MM,
+        "baseline_locked": True,
         "workflow": {
             "request_type": "start_initialization",
             "capture_job": "golden_sample",

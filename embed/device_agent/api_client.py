@@ -158,6 +158,9 @@ class APIClient:
 					"right_file": (right_path.name, rf, "image/png"),
 				}
 				data: Dict[str, Any] = {}
+				if self.config.device_id:
+					data["device_id"] = self.config.device_id
+					data["device_code"] = self.config.device_id
 				if artifact_id:
 					data["artifact_id"] = artifact_id
 				response = requests.post(

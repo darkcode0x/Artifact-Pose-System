@@ -73,7 +73,6 @@ class _PersistedWorkflowState {
 class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
   static final Map<String, _PersistedWorkflowState> _stateCache = {};
 
-  static const double _baselineMm = 100.0;
   static const Duration _pollInterval = Duration(seconds: 3);
 
   late final WorkflowService _workflowService;
@@ -320,7 +319,6 @@ class _DeviceWorkflowScreenState extends State<DeviceWorkflowScreen> {
       final result = await _workflowService.startInitialization(
         deviceId: device!.deviceCode,
         artifactId: artifact!.id,
-        baselineMm: _baselineMm,
       );
       if (!mounted) return;
 

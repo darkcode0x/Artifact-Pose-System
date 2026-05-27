@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_container
+from app.api.dependencies import get_container, get_current_user
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.artifact import Artifact, Image, ImageComparison, Schedule, InspectionType
@@ -16,7 +16,11 @@ from app.schemas.inspection_record import InspectionListResponse, InspectionRead
 from app.services.state import AppContainer
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/v1/artifacts", tags=["artifacts"])
+router = APIRouter(
+    prefix="/api/v1/artifacts",
+    tags=["artifacts"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 def _to_url(path_str: str | None) -> str | None:

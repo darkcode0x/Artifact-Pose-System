@@ -51,28 +51,6 @@ class DeviceService {
     );
   }
 
-  /// `POST /api/v1/devices` — admin/operator creates device. Backend uses query params.
-  Future<void> create(String deviceCode, {String description = ''}) async {
-    await _api.post('/api/v1/devices', query: {
-      'device_code': deviceCode,
-      'description': description,
-    });
-  }
-
-  /// `PATCH /api/v1/devices/{id}` — update description/status. Query params.
-  Future<void> update(String deviceId,
-      {String? description, String? status}) async {
-    final query = <String, dynamic>{};
-    if (description != null) query['description'] = description;
-    if (status != null) query['status'] = status;
-    await _api.patch('/api/v1/devices/$deviceId', query: query);
-  }
-
-  /// `DELETE /api/v1/devices/{id}` — admin only.
-  Future<void> delete(String deviceId) async {
-    await _api.delete('/api/v1/devices/$deviceId');
-  }
-
   /// `GET /api/v1/devices/{id}/acks` — recent ack history.
   Future<List<Map<String, dynamic>>> acks(String deviceId,
       {int limit = 20}) async {

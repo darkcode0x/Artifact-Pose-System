@@ -130,22 +130,18 @@ class ApiClient {
   // ── Workflow / Device APIs ───────────────────────────────────────────────
 
   Future<Map<String, dynamic>> deviceStatus(String deviceId) async {
-    final res = await get('/devices/$deviceId/status');
+    final res = await get('/api/v1/devices/$deviceId/status');
     return Map<String, dynamic>.from(res as Map);
   }
 
   Future<Map<String, dynamic>> startInitialization({
     required String deviceId,
     required String artifactId,
-    double baselineMm = 100.0,
-    double stepsPerMm = 800.0,
   }) async {
     final res = await post(
       '/workflows/$deviceId/start-initialization',
       body: {
         'artifact_id': artifactId,
-        'baseline_mm': baselineMm,
-        'steps_per_mm': stepsPerMm,
       },
     );
     return Map<String, dynamic>.from(res as Map);

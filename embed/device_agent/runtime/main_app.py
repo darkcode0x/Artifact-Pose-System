@@ -85,6 +85,8 @@ def _read_first_existing_file(paths: list[Path]) -> str:
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _load_dotenv_file(_PROJECT_ROOT / ".env")
 _DEFAULT_IMAGE_DIR = _PROJECT_ROOT / "data" / "pictures"
+FIXED_STEREO_BASELINE_MM = 100.0
+FIXED_STEREO_BASELINE_STEPS = 80000
 
 
 class ExpiringTaskIdStore:
@@ -797,7 +799,7 @@ class MainApp:
     def _handle_capture_stereo_pair(self, command: Dict[str, Any]) -> None:
         """Chup cap anh stereo: left → di chuyen slider X → right → quay lai → upload."""
         artifact_id = str(command.get("artifact_id", self.config.default_artifact_id))
-        baseline_steps = int(command.get("baseline_steps", 80000))
+        baseline_steps = FIXED_STEREO_BASELINE_STEPS
         lens_position = float(command.get("lens_position", self.config.lens_position))
         ts = time.time_ns()
 
@@ -817,7 +819,7 @@ class MainApp:
             return
 
         # 2) Di chuyen slider X them baseline_steps (huong duong)
-        print(f"[STEREO] Di chuyen slider X +{baseline_steps} steps")
+        print(f"[STEREO] Di chuyen slider X +{baseline_steps} steps ({FIXED_STEREO_BASELINE_MM:.0f}mm fixed baseline)")
         self._move_slider_x_with_profile(abs(baseline_steps), 1)
         time.sleep(0.5)
 

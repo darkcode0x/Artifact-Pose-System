@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CaptureJobType(str, Enum):
@@ -26,9 +26,9 @@ class StartAlignmentRequest(BaseModel):
 
 
 class StartInitializationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     artifact_id: str = "artifact_demo_001"
-    baseline_mm: float = Field(default=100.0, gt=0, description="Stereo baseline in mm")
-    steps_per_mm: float = Field(default=800.0, gt=0, description="Stepper motor steps per mm")
     camera_overrides: dict[str, Any] = Field(default_factory=dict)
 
 

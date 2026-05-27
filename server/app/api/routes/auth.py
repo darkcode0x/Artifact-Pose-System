@@ -18,6 +18,8 @@ def login(data: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse:
     user = db.query(User).filter(User.username == data.username).first()
     if user is None:
         raise HTTPException(status_code=401, detail="Sai tai khoan")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Tai khoan da bi vo hieu hoa")
 
     # Changed from user.hashed_password to user.password_hash
     if not verify_password(data.password, user.password_hash):
