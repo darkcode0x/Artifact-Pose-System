@@ -1,489 +1,616 @@
-# Hướng dẫn Deploy & Test — USB (adb reverse) hoặc WiFi LAN
+# Hướng Dẫn Deploy & Test
 
-**Mục tiêu:** Chạy server Docker trên máy tính, kết nối app Flutter trên điện thoại Android tới server — qua dây USB (dùng `adb reverse`) **hoặc** qua WiFi LAN.
-
----
-
-## Chọn phương thức kết nối
-
-| Phương thức | Điều kiện | Lệnh build app |
-|---|---|---|
-| **USB + adb reverse** | Cắm dây USB, bật USB Debugging | `--dart-define=API_BASE_URL=http://127.0.0.1:8000` |
-| **WiFi LAN** | PC và điện thoại cùng mạng WiFi | `--dart-define=API_BASE_URL=http://<IP_PC>:8000` |
-
-> **Quan trọng về 127.0.0.1:** Khi dùng `adb reverse tcp:8000 tcp:8000`, lệnh này tạo một **tunnel từ điện thoại lên máy tính**. Lúc này `127.0.0.1:8000` trên điện thoại **không phải** điện thoại — mà thực sự đi đến `127.0.0.1:8000` trên **máy tính**. Nếu không có `adb reverse` chạy trước, app sẽ không kết nối được server.
+> Cập nhật: 28/05/2026
+> Phạm vi: chạy FastAPI server bằng Docker trên PC/WSL2, cài Flutter app lên Android qua USB hoặc WiFi LAN, và kết nối Raspberry Pi device agent qua LAN/hotspot.
 
 ---
 
-## Kiến trúc khi dùng USB (adb reverse)
+## 1. Tóm Tắt Kiến Trúc Deploy
 
 ```
-┌──────────────────────────────┐
-│       MÁY TÍNH (PC/Laptop)   │
-│                              │
-│  Docker: FastAPI :8000       │
-│  Docker: PostgreSQL :5432    │
-│  Docker: MQTT :1883          │
-│                              │
-│  adb reverse tcp:8000 tcp:8000│
-└──────────────┬───────────────┘
-               │ Cáp USB
-┌──────────────▼───────────────┐
-│     ĐIỆN THOẠI ANDROID       │
-│                              │
-│  Flutter App                 │
-│  → gọi http://127.0.0.1:8000 │
-│    tunnel qua USB đến PC     │
-└──────────────────────────────┘
+Artifact-Pose-System/
+├── server/                 FastAPI + MQTT bridge + PostgreSQL + pose/AI
+├── client/artifact_app/    Flutter Android app
+├── embed/device_agent/     Agent chạy trên Raspberry Pi
+├── model/                  File model YOLO *.pt được mount vào container
+└── scripts/                Script hỗ trợ adb reverse qua USB/WSL
 ```
+
+Luồng chạy thực tế:
+
+1. PC chạy Docker Compose: `artifact_server`, `artifact_postgres`, `artifact_mosquitto`.
+2. App Android gọi REST API tới FastAPI server.
+3. Server gửi lệnh điều khiển tới Raspberry Pi qua MQTT topic `cmd/{device_code}`.
+4. Raspberry Pi chụp ảnh, di chuyển servo/slider, gửi ACK/status qua MQTT và upload ảnh về server.
+5. Server chạy pose correction, golden pose initialization, SSIM/AI inspection và trả kết quả cho app.
 
 ---
 
-## Kiến trúc khi dùng WiFi LAN
+## 2. Các Quy Ước Quan Trọng Hiện Tại
 
+### `device_id` và `device_code`
+
+- `device_id`: ID nội bộ trong bảng `iot_devices`, dạng chuỗi 6 ký tự.
+- `device_code`: mã thiết bị Raspberry Pi dùng cho MQTT/API vận hành, ví dụ `dev-bbb742d369`.
+- App và workflow phải dùng `device_code` khi gọi status, ACK, queue command, start workflow.
+- Pi vẫn nhận field `device_id` trong response đăng ký để tương thích code agent hiện tại, nhưng giá trị đó chính là `device_code`.
+- API tạo/sửa/xóa thiết bị thủ công đã bị loại bỏ. Thiết bị được quản lý qua registry và tự upsert vào DB khi Pi register.
+
+Thiết bị hiện có trong registry:
+
+```json
+{
+  "machine_to_device": {
+    "md5-bbb742d369f860d8e4ed1069b715f6fd": "dev-bbb742d369"
+  }
+}
 ```
-┌──────────────────────────────┐
-│  MÁY TÍNH (IP: 192.168.x.y)  │
-│  Docker: FastAPI :8000       │
-│  Firewall: mở port 8000      │
-└──────────────┬───────────────┘
-               │ WiFi Router
-┌──────────────▼───────────────┐
-│  ĐIỆN THOẠI ANDROID          │
-│  Flutter App                 │
-│  → http://192.168.x.y:8000   │
-└──────────────────────────────┘
-```
+
+### Baseline stereo
+
+Baseline stereo được khóa cố định:
+
+- `100.0 mm`
+- `80000 steps`
+- `800 steps/mm`
+- Pose solver dùng `0.10 m`
+
+Baseline không còn là tham số nhập từ giao diện và không được phép override qua API `start-initialization`. Nếu client cố gửi `baseline_mm` hoặc `steps_per_mm`, server sẽ reject request.
 
 ---
 
-## Cấu hình IP trong app
+## 3. Yêu Cầu Cài Đặt
 
-File: `client/artifact_app/lib/services/api_config.dart`
+### Trên PC/WSL2
 
-```dart
-// Thay đổi IP này thành IP LAN thực tế của máy tính bạn
-static const String _pcIp = '192.168.1.169';
-```
+- Docker Desktop + Docker Compose v2
+- WSL2 Ubuntu nếu chạy trên Windows
+- Flutter SDK phù hợp với `client/artifact_app/pubspec.yaml` (`sdk: ^3.7.2`)
+- Android SDK / ADB
+- `usbipd-win` nếu muốn dùng USB từ Windows vào WSL
+- Git, curl
 
-- Nếu dùng **WiFi LAN**: sửa `_pcIp` thành IP WiFi của PC (xem bằng `ip addr` / `ipconfig`)
-- Nếu dùng **USB adb reverse**: truyền `--dart-define=API_BASE_URL=http://127.0.0.1:8000` khi build/run
-
----
-
-## Yêu cầu cài đặt trên máy tính
-
-| Phần mềm | Kiểm tra |
-|---|---|
-| Docker + Docker Compose | `docker --version` |
-| Flutter SDK ≥ 3.7 | `flutter --version` |
-| Android SDK / ADB | `adb --version` |
-
----
-
-## Bước 1 — Bật Developer Options trên điện thoại (chỉ cho USB)
-
-1. Vào **Cài đặt → Giới thiệu điện thoại**
-2. Nhấn **Số phiên bản** (Build number) **7 lần liên tiếp** → bật chế độ nhà phát triển
-3. Vào **Cài đặt → Tùy chọn nhà phát triển**
-4. Bật **USB Debugging** (Gỡ lỗi USB)
-5. Cắm dây USB vào máy tính → điện thoại hiện hộp thoại, chọn **Cho phép**
+Kiểm tra nhanh:
 
 ```bash
-adb devices
-# Kết quả: trạng thái "device", không phải "unauthorized"
+docker --version
+docker compose version
+flutter --version
+adb --version
 ```
 
+### Trên Android
+
+- Bật Developer Options.
+- Bật USB Debugging nếu deploy qua USB.
+- Cho phép cài APK từ nguồn ngoài nếu cài file release thủ công.
+
+### Trên Raspberry Pi
+
+- Python 3.10+
+- Camera hỗ trợ `picamera2`
+- I2C bật cho PCA9685
+- GPIO hoạt động cho stepper driver
+- Các package Python chính: `requests`, `paho-mqtt`, `picamera2`, `adafruit-circuitpython-servokit`, `RPi.GPIO`
+
 ---
-### Lưu ý: Khi bạn thay model .pt mới, chạy lại:
-docker cp /path/to/new-model.pt artifact_server:/app/model/
-docker restart artifact_server
 
-
-
-## Bước 2 — Khởi động Server (Docker)
+## 4. Khởi Động Server Bằng Docker
 
 ```bash
 cd /home/thepiece/System/Artifact-Pose-System/server
 ```
 
-### Lần đầu (build image):
+Nếu chưa có file env Docker:
+
+```bash
+cp env.docker.example .env.docker
+```
+
+Các biến quan trọng trong `server/.env.docker`:
+
+```env
+POSTGRES_DB=artifact_auth
+POSTGRES_USER=artifact
+POSTGRES_PASSWORD=artifact123
+
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=123456
+AUTH_SECRET_KEY=CHANGE_ME_AUTH_SECRET
+
+MQTT_HOST=mosquitto
+MQTT_PORT=1883
+
+ARTIFACT_LENS_POSITION=1.5
+MAX_ALIGNMENT_ITERATIONS=7
+ALIGNMENT_TIMEOUT_SEC=300
+
+SIGN_MOVE_X=1
+SIGN_MOVE_Z=1
+SIGN_ROTATE_PAN=-1
+SIGN_ROTATE_TILT=-1
+```
+
+Với deploy thật, đổi `POSTGRES_PASSWORD`, `ADMIN_PASSWORD`, `AUTH_SECRET_KEY` trước khi đưa server ra mạng rộng.
+
+Build và chạy lần đầu:
+
 ```bash
 docker compose --env-file .env.docker up -d --build
 ```
 
-### Các lần sau:
+Các lần sau:
+
 ```bash
 docker compose --env-file .env.docker up -d
 ```
 
-### Kiểm tra server OK:
+Kiểm tra container:
+
 ```bash
-curl http://127.0.0.1:8000/health
-# → {"status":"ok"}
+docker compose --env-file .env.docker ps
 ```
 
-### Kiểm tra tài khoản admin:
+Kiểm tra server:
+
+```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/mqtt/health
+```
+
+`/health` hợp lệ sẽ có dạng:
+
+```json
+{"status":"ok","mqtt_connected":"true"}
+```
+
+Đăng nhập lấy token:
+
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"123456"}'
 ```
 
-### (Nếu dùng WiFi) Mở port 8000 trên firewall:
-```bash
-# Linux (UFW)
-sudo ufw allow 8000/tcp
+Xem log server:
 
-# Kiểm tra IP PC để cấu hình cho app
-ip -4 addr show | grep -oP '(?<=inet )192\.[0-9.]+'
+```bash
+docker compose --env-file .env.docker logs -f server
+```
+
+Dừng server:
+
+```bash
+docker compose --env-file .env.docker down
 ```
 
 ---
 
-## Bước 3 — Thiết lập adb reverse (chỉ cho USB)
+## 5. Model AI
 
-### Cách tự động (khuyên dùng)
+Docker Compose mount thư mục:
 
-Mỗi lần cắm lại USB, chỉ cần chạy **một lệnh duy nhất** từ Windows PowerShell:
+```text
+../model -> /app/model
+```
+
+File model hiện có:
+
+```text
+model/new-10-05-best.pt
+```
+
+Server tự scan file `*.pt` đầu tiên trong `/app/model` và load với tên mặc định `default` khi khởi động.
+
+Thay model:
+
+```bash
+cp /path/to/new-model.pt /home/thepiece/System/Artifact-Pose-System/model/
+cd /home/thepiece/System/Artifact-Pose-System/server
+docker compose --env-file .env.docker restart server
+```
+
+Hoặc load model qua API admin:
+
+```bash
+TOKEN="<admin_access_token>"
+
+curl -X POST http://127.0.0.1:8000/models/load \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"default","path":"/app/model/new-10-05-best.pt","backend":"auto","labels":[]}'
+```
+
+---
+
+## 6. Deploy App Android Qua USB `adb reverse`
+
+Dùng cách này khi điện thoại cắm USB vào PC và muốn app gọi server bằng `http://127.0.0.1:8000`.
+
+### 6.1. Bật USB Debugging
+
+1. Android Settings → About phone.
+2. Nhấn Build number 7 lần để bật Developer Options.
+3. Developer Options → bật USB Debugging.
+4. Cắm USB, chọn Allow USB debugging trên điện thoại.
+
+Kiểm tra:
+
+```bash
+adb devices
+```
+
+Thiết bị phải ở trạng thái `device`, không phải `unauthorized`.
+
+### 6.2. Thiết lập tunnel bằng script
+
+Từ Windows PowerShell:
 
 ```powershell
 cd \\wsl.localhost\Ubuntu-22.04\home\thepiece\System\Artifact-Pose-System
-
 powershell -ExecutionPolicy Bypass -File scripts\attach_android_usb.ps1
 ```
 
-Script sẽ tự:
-1. Tìm điện thoại Android trong danh sách usbipd (theo VID hoặc tên)
-2. `usbipd bind` + `usbipd attach --wsl`
-3. Chạy `adb reverse tcp:8000 tcp:8000` trong WSL
+Script sẽ:
 
-> Lần đầu chạy sẽ hiện UAC prompt (cần Admin cho bước `bind`). Các lần sau không cần.
+- tìm Android device bằng `usbipd`;
+- bind/attach USB vào WSL;
+- chạy `adb reverse tcp:8000 tcp:8000`.
 
-Hoặc nếu USB đã attach rồi, chỉ cần chạy trong WSL:
+Nếu USB đã attach vào WSL rồi, chạy trực tiếp trong WSL:
 
 ```bash
+cd /home/thepiece/System/Artifact-Pose-System
 ./scripts/wsl_adb_setup.sh
 ```
 
----
+Kiểm tra tunnel:
 
-### Cách thủ công (nếu script không chạy được)
-
-```powershell
-# 1. Tìm BUSID của điện thoại
-usbipd list
-
-# 2. Bind (cần Admin, chỉ cần 1 lần cho mỗi thiết bị)
-usbipd bind --busid 1-4
-
-# 3. Attach vào WSL
-usbipd attach --wsl --busid 1-4
-```
-
-Sau đó trong WSL:
-```bash
-adb devices
-adb reverse tcp:8000 tcp:8000
-```
-
----
-
-> ⚠️ **Phải chạy lại sau mỗi lần:**
-> - Cắm lại dây USB
-> - Khởi động lại điện thoại
-> - `adb kill-server` / `adb start-server`
-
-Kiểm tra tunnel còn hoạt động:
 ```bash
 adb reverse --list
-# → 8000 tcp:8000  (tunnel đang active)
 ```
 
----
+Kết quả cần có `tcp:8000 tcp:8000`.
 
-## Bước 4 — Build & Deploy Flutter App
+Lưu ý: phải chạy lại `adb reverse` sau khi rút cáp, restart điện thoại, hoặc restart adb server.
+
+### 6.3. Build/run app với USB
 
 ```bash
 cd /home/thepiece/System/Artifact-Pose-System/client/artifact_app
 flutter pub get
+flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
 ```
 
-### Cách A: USB + adb reverse (127.0.0.1)
+Build APK release:
 
 ```bash
-# Debug mode (nhanh, dùng để test)
-flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
-
-rm -rf .dart_tool
-rm -rf build
 flutter clean
 flutter pub get
-
-# Release APK (cài thủ công)
 flutter build apk --release --dart-define=API_BASE_URL=http://127.0.0.1:8000
-adb install build/app/outputs/flutter-apk/app-release.apk
+adb install -r build/app/outputs/flutter-apk/app-release.apk
+```
 
-adb install -r build/app/outputs/flutter-apk/app-release.apk cài đè
-//cài lại
+Cài lại sạch:
+
+```bash
 adb uninstall com.pbl5.artifactapp
 adb install build/app/outputs/flutter-apk/app-release.apk
 ```
 
-### Cách B: WiFi LAN (thay IP thực tế của PC)
+---
+
+## 7. Deploy App Android Qua WiFi LAN
+
+Dùng cách này khi điện thoại và PC cùng mạng LAN/WiFi.
+
+Tìm IP PC:
 
 ```bash
-# Xem IP WiFi của PC
 ip -4 addr show | grep -oP '(?<=inet )192\.[0-9.]+'
+```
 
-# Debug mode
+Hoặc trên Windows:
+
+```bash
+cmd.exe /c ipconfig
+```
+
+Mở firewall port 8000 nếu cần:
+
+```bash
+sudo ufw allow 8000/tcp
+```
+
+Build/run app với IP thật của PC:
+
+```bash
+cd /home/thepiece/System/Artifact-Pose-System/client/artifact_app
+flutter pub get
 flutter run --dart-define=API_BASE_URL=http://192.168.x.y:8000
+```
 
-# Release APK
+Build APK:
+
+```bash
 flutter build apk --release --dart-define=API_BASE_URL=http://192.168.x.y:8000
-adb install build/app/outputs/flutter-apk/app-release.apk
+adb install -r build/app/outputs/flutter-apk/app-release.apk
 ```
 
-> Hoặc sửa `_pcIp` trong `api_config.dart` thành IP thực và build không cần `--dart-define`.
+Nếu không truyền `--dart-define`, app sẽ dùng giá trị mặc định trong:
 
----
-
-## Bước 5 — Kiểm tra thiết bị IoT (Raspberry Pi) đã đăng ký
-
-Raspberry Pi tự đăng ký khi khởi động bằng cách gọi `POST /api/v1/devices/get_device_id`. Thiết bị `dev-bbb742d369` đã được đăng ký sẵn trong DB.
-
-Kiểm tra:
-```bash
-docker exec artifact_postgres psql -U artifact -d artifact_auth \
-  -c "SELECT device_id, device_code, status FROM iot_devices;"
+```text
+client/artifact_app/lib/services/api_config.dart
 ```
 
-Kết quả mong đợi:
-```
- device_id |  device_code   | status
------------+----------------+---------
- bbb742    | dev-bbb742d369 | offline
-```
+Hiện tại mặc định đang là:
 
-Khi Pi kết nối và gửi tín hiệu MQTT, status tự chuyển thành `online`.
-
----
-
-## Bước 6 — Test trên giao diện app
-
-### Tài khoản mặc định
-
-| Role | Username | Password |
-|---|---|---|
-| Admin | `admin` | `123456` |
-
----
-
-### 6.1 Đăng nhập
-
-1. Mở app → màn hình **Đăng nhập**
-2. Nhập `admin` / `123456` → **Đăng nhập**
-3. ✅ Chuyển vào **Admin Dashboard**
-
----
-
-### 6.2 Quản lý Hiện vật (Artifacts)
-
-1. Vào tab **Hiện vật**
-2. Nhấn **+** → điền Tên, Mô tả, Địa điểm → **Lưu**
-3. ✅ Hiện vật xuất hiện trong danh sách
-
-**Chi tiết hiện vật:**
-- Nhấn vào hiện vật → xem thông tin và lịch sử kiểm tra
-- Nhấn **Kiểm tra qua thiết bị IoT** để bắt đầu quy trình IoT 3 bước
-
----
-
-### 6.3 Quy trình Kiểm tra IoT (3 bước)
-
-Truy cập bằng 2 cách:
-- Tab **Thiết bị** → chọn thiết bị → màn hình workflow
-- Chi tiết hiện vật → **Kiểm tra qua thiết bị IoT**
-
-#### Bước 1 — Khởi tạo Golden Pose
-1. Chọn thiết bị `dev-bbb742d369` từ dropdown (nếu chưa chọn sẵn)
-2. Chọn hiện vật cần kiểm tra
-3. Nhập **Baseline (mm)** — khoảng cách giữa 2 camera stereo (mặc định: 100mm)
-4. Nhấn **Bắt đầu Khởi tạo**
-5. ✅ Raspberry Pi nhận lệnh qua MQTT, chụp ảnh stereo, lưu golden pose
-
-#### Bước 2 — Căn chỉnh tư thế
-1. Nhấn **Bắt đầu Căn chỉnh**
-2. Pi bắt đầu vòng lặp chụp-tính-điều chỉnh
-3. App tự refresh log ACK mỗi 3 giây để hiển thị kết quả từng bước
-4. Khi tư thế đã khớp với golden pose → nhấn **Căn chỉnh xong**
-
-#### Bước 3 — AI Kiểm tra hư hại
-1. Nhấn **Kiểm tra AI**
-2. Server dùng ảnh đã chụp từ Pi (không cần upload từ điện thoại)
-3. ✅ Kết quả: điểm hư hại (0–10), trạng thái (good/warning/damaged), SSIM
-4. Nhấn **Xem kết quả** để xem chi tiết
-
----
-
-### 6.4 Quản lý Thiết bị (Devices)
-
-- Vào tab **Thiết bị** → danh sách thiết bị đã đăng ký trong DB
-- Nhấn vào thiết bị → màn hình workflow 3 bước
-- Nhấn icon **ℹ️** → thông tin thiết bị và lịch sử ACK
-
-> **Lưu ý:** Thiết bị tự đăng ký qua API khi Pi khởi động. App không có chức năng thêm/xóa thiết bị thủ công.
-
----
-
-### 6.5 Quản lý Lịch kiểm tra (Schedules)
-
-1. Vào tab **Lịch** → nhấn **+** → chọn hiện vật, ngày, giờ, operator → **Lưu**
-
----
-
-### 6.6 Quản lý Người dùng (Users) — Admin
-
-1. Vào **Admin Dashboard → Người dùng**
-2. Nhấn **+** → điền username, password, full name, role: `operator`
-3. Nhấn **Lưu**
-
----
-
-## Bước 7 — Test API bằng Swagger UI
-
-Mở trình duyệt trên máy tính:
-```
-http://127.0.0.1:8000/docs
+```dart
+static const String _pcIp = '192.168.1.169';
 ```
 
-| Nhóm | Endpoint quan trọng |
-|---|---|
-| Auth | `POST /api/v1/auth/login` |
-| Devices | `GET /api/v1/devices` — danh sách thiết bị |
-| Devices | `GET /api/v1/devices/{id}/acks` — lịch sử ACK |
-| Workflows | `POST /workflows/{device_code}/start-initialization` |
-| Workflows | `POST /workflows/{device_code}/start-alignment` |
-| Artifacts | `POST /api/v1/artifacts/{id}/inspect-from-device` |
-
-> **Lưu ý:** Các endpoint workflow dùng `device_code` (như `dev-bbb742d369`) làm path param, không phải `device_id` (6-char hex).
+Khuyến nghị vẫn dùng `--dart-define=API_BASE_URL=...` khi build để tránh quên sửa hardcode.
 
 ---
 
-## Xử lý sự cố
+## 8. Cấu Hình Raspberry Pi Device Agent
 
-### App không kết nối được server
+File cấu hình:
+
+```text
+embed/device_agent/.env
+```
+
+Ví dụ khi Pi nối vào hotspot của PC, PC có IP hotspot `192.168.137.1`:
+
+```env
+DEVICE_ID=
+USE_SERVER_DEVICE_ID=true
+SERVER_BASE_URL=http://192.168.137.1:8000
+
+MQTT_HOST=192.168.137.1
+MQTT_PORT=1883
+MQTT_KEEPALIVE_SEC=60
+MQTT_USERNAME=
+MQTT_PASSWORD=
+MQTT_QOS=1
+
+MQTT_CMD_TOPIC_TEMPLATE=cmd/{device_id}
+MQTT_ACK_TOPIC_TEMPLATE=ack/{device_id}
+MQTT_STATUS_TOPIC_TEMPLATE=status/{device_id}
+
+IMAGE_DIR=./data/pictures
+DEFAULT_ARTIFACT_ID=artifact_demo_001
+LENS_POSITION=1.5
+
+SLIDER_FAST_RATIO=0.85
+SLIDER_FAST_PULSE_DELAY_SEC=0.00035
+SLIDER_SLOW_PULSE_DELAY_SEC=0.0008
+AUTO_CAPTURE_AFTER_MOVE=true
+```
+
+Nếu Pi và PC cùng WiFi LAN, đổi:
+
+```env
+SERVER_BASE_URL=http://<IP_PC_LAN>:8000
+MQTT_HOST=<IP_PC_LAN>
+```
+
+Chạy agent:
 
 ```bash
-# 1. Kiểm tra server đang chạy
+cd /home/pi/Artifact-Pose-System/embed/device_agent
+PYTHONPATH=. python3 runtime/main_app.py
+```
+
+Launcher tương thích cũ cũng còn hoạt động:
+
+```bash
+PYTHONPATH=. python3 main_app.py
+```
+
+Khi Pi khởi động đúng, log cần có các ý chính:
+
+```text
+[APP] Nhận device_id từ server: dev-bbb742d369
+[MQTT] Connected ...
+[APP] Listening for commands on: cmd/dev-bbb742d369
+```
+
+Pi đăng ký bằng:
+
+```text
+POST /api/v1/devices/get_device_id
+```
+
+Server sẽ:
+
+- đọc/cập nhật `server/data/device_registry.json`;
+- upsert thiết bị vào bảng `iot_devices`;
+- dùng `device_code` đó cho MQTT topic.
+
+---
+
+## 9. Kiểm Tra Thiết Bị Và MQTT
+
+Xem danh sách device qua API cần token:
+
+```bash
+TOKEN="<access_token>"
+
+curl http://127.0.0.1:8000/api/v1/devices \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Kiểm tra status realtime của Pi:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/devices/dev-bbb742d369/status
+```
+
+Xem ACK gần nhất:
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/devices/dev-bbb742d369/acks?limit=20"
+```
+
+Theo dõi MQTT status trực tiếp:
+
+```bash
+docker exec -it artifact_mosquitto mosquitto_sub -h localhost -t "status/#" -v
+```
+
+Gửi một lệnh test nhỏ:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/devices/dev-bbb742d369/queue_move \
+  -H "Content-Type: application/json" \
+  -d '{"action":"move","yaw_delta":1.0,"pitch_delta":0.0,"x_steps":0,"z_steps":0,"x_dir":1,"z_dir":1}'
+```
+
+Cẩn thận: lệnh có `x_steps` hoặc `z_steps` khác 0 sẽ làm phần cứng di chuyển thật.
+
+---
+
+## 10. Smoke Test API + MQTT + ACK
+
+Script:
+
+```text
+server/tools/smoke_test_api_mqtt_ack.py
+```
+
+Nếu Pi agent đang chạy sẵn:
+
+```bash
+cd /home/thepiece/System/Artifact-Pose-System
+python3 server/tools/smoke_test_api_mqtt_ack.py \
+  --base-url http://127.0.0.1:8000 \
+  --no-remote-agent \
+  --device-id dev-bbb742d369 \
+  --allow-ack-non-ok
+```
+
+Script kiểm tra:
+
+1. `/health`
+2. `/mqtt/health`
+3. device online
+4. publish command qua `/api/v1/devices/{device_code}/queue_move`
+5. đợi ACK từ Pi
+6. đọc `/mqtt/events`
+
+---
+
+## 11. Quy Trình Deploy Nhanh Từ Đầu
+
+```bash
+# 1. Server
+cd /home/thepiece/System/Artifact-Pose-System/server
+docker compose --env-file .env.docker up -d --build
 curl http://127.0.0.1:8000/health
 
-# 2. Kiểm tra tunnel USB còn active (chế độ adb reverse)
-adb reverse --list
-# Nếu không thấy tcp:8000:
-adb reverse tcp:8000 tcp:8000
+# 2. USB tunnel cho Android
+cd /home/thepiece/System/Artifact-Pose-System
+./scripts/wsl_adb_setup.sh
 
-# 3. Chế độ WiFi: kiểm tra IP PC có đúng không
-ip -4 addr show | grep inet
-# Rebuild với IP mới nếu thay đổi
-```
-
-### Điện thoại hiện `unauthorized`
-
-```bash
-adb kill-server && adb start-server && adb devices
-# Mở khóa điện thoại → chấp nhận hộp thoại USB Debugging
-```
-
-### Server lỗi khi khởi động
-
-```bash
-cd server
-docker compose --env-file .env.docker logs server
-docker compose --env-file .env.docker down
-docker compose --env-file .env.docker up -d --build
-```
-
-### Thiết bị IoT không nhận lệnh
-
-```bash
-# Kiểm tra device đã có trong DB
-docker exec artifact_postgres psql -U artifact -d artifact_auth \
-  -c "SELECT device_id, device_code, status FROM iot_devices;"
-
-# Kiểm tra MQTT kết nối
-docker logs artifact_mosquitto
-
-# Kiểm tra MQTT bridge trong server logs
-cd server && docker compose --env-file .env.docker logs server | grep -i mqtt
-```
-
-### Reset toàn bộ database
-
-```bash
-cd server
-docker compose --env-file .env.docker down -v   # ⚠️ xóa toàn bộ dữ liệu
-docker compose --env-file .env.docker up -d --build
-# Sau đó tạo lại admin:
-docker exec -it artifact_server python tools/create_admin.py
-# Và insert lại device:
-docker exec artifact_postgres psql -U artifact -d artifact_auth \
-  -c "INSERT INTO iot_devices VALUES ('bbb742','dev-bbb742d369','Raspberry Pi Camera','offline',NOW()) ON CONFLICT DO NOTHING;"
-```
-
-### Flutter build lỗi
-
-```bash
+# 3. Flutter app qua USB
 cd client/artifact_app
-flutter clean && flutter pub get
-flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
+flutter pub get
+flutter build apk --release --dart-define=API_BASE_URL=http://127.0.0.1:8000
+adb install -r build/app/outputs/flutter-apk/app-release.apk
+
+# 4. Pi agent
+cd /home/pi/Artifact-Pose-System/embed/device_agent
+PYTHONPATH=. python3 runtime/main_app.py
 ```
 
 ---
 
-## Tóm tắt lệnh nhanh (chạy mỗi phiên làm việc)
+## 12. Các Lỗi Thường Gặp
 
-```powershell
-# === Windows PowerShell: attach USB + adb reverse (1 lệnh duy nhất) ===
-powershell -ExecutionPolicy Bypass -File scripts\attach_android_usb.ps1
-```
+### App không đăng nhập được
+
+Kiểm tra server:
 
 ```bash
-# === WSL Terminal 1: Khởi động server ===
-cd /home/thepiece/System/Artifact-Pose-System/server
-docker compose --env-file .env.docker up -d
-curl http://127.0.0.1:8000/health     # xác nhận OK
-
-# === WSL Terminal 2: Chạy app Flutter (USB mode) ===
-cd /home/thepiece/System/Artifact-Pose-System/client/artifact_app
-flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
-
-# === Hoặc: WiFi mode (thay IP thực tế của PC) ===
-flutter run --dart-define=API_BASE_URL=http://192.168.x.y:8000
+curl http://127.0.0.1:8000/health
 ```
 
+Nếu dùng USB, kiểm tra:
 
+```bash
+adb devices
+adb reverse --list
+```
 
+Nếu dùng WiFi, mở browser trên điện thoại:
 
-## Trên server:
+```text
+http://<IP_PC>:8000/health
+```
 
-docker compose logs -f server
+### Login báo inactive
 
+Server hiện đã chặn user `is_active=false` ở cả login và JWT dependency. Dùng admin bật lại user trong màn hình Users hoặc cập nhật DB.
 
-## Trên Pi:
-cd embed/device_agent
+### Pi không xuất hiện trong app
 
-PYTHONPATH=. python3 runtime/main_app.py
+Kiểm tra registry:
 
-## Show màn hình điện thoại:
-scrcpy
+```bash
+cat /home/thepiece/System/Artifact-Pose-System/server/data/device_registry.json
+```
 
-## Trên WSL - init:
-curl -X POST http://localhost:8000/workflows/dev-bbb742d369/start-initialization \
-  -H "Content-Type: application/json" \
-  -d '{"artifact_id":"artifact_demo_001","baseline_mm":100.0,"steps_per_mm":800.0}'
+Kiểm tra DB:
 
-## Dịch vật thể:
-curl -X POST http://localhost:8000/workflows/dev-bbb742d369/start-alignment \
-  -H "Content-Type: application/json" \
-  -d '{"artifact_id":"artifact_demo_001"}'
+```bash
+docker exec -it artifact_postgres psql -U artifact -d artifact_auth \
+  -c "SELECT device_id, device_code, status, last_active_at FROM iot_devices;"
+```
+
+Nếu Pi chưa register, restart Pi agent và kiểm tra `SERVER_BASE_URL`.
+
+### MQTT disconnected
+
+```bash
+curl http://127.0.0.1:8000/mqtt/health
+docker compose --env-file server/.env.docker -f server/docker-compose.yml logs --tail=80 server
+docker compose --env-file server/.env.docker -f server/docker-compose.yml restart mosquitto server
+```
+
+### Golden initialization lỗi 400
+
+Nguyên nhân thường gặp:
+
+- camera params thiếu hoặc sai lens position;
+- marker ChArUco không nằm rõ trong ảnh left;
+- ảnh stereo không đủ feature ORB;
+- Pi upload thiếu `device_code` hoặc device chưa có trong registry;
+- file ảnh left/right không đọc được.
+
+Kiểm tra ảnh upload:
+
+```bash
+ls -lh server/data/uploads/pose_init/
+docker compose --env-file server/.env.docker -f server/docker-compose.yml logs --tail=100 server
+```
+
+### Model không load
+
+```bash
+ls -lh model/*.pt
+docker compose --env-file server/.env.docker -f server/docker-compose.yml logs --tail=100 server | grep STARTUP
+```
+
+Nếu thay model, restart server.
+
+---
+
+## 13. Ghi Chú Bảo Mật
+
+- `AUTH_SECRET_KEY=CHANGE_ME_AUTH_SECRET` chỉ phù hợp môi trường dev.
+- Mosquitto hiện `allow_anonymous true`, phù hợp LAN/dev nhưng không nên mở public.
+- Các route app như artifacts, schedules, workflows, models, pose manual cần JWT.
+- `POST /pose/initialize_golden` cho phép JWT hoặc device đã có trong registry, để Pi upload stereo pair mà không cần tài khoản app.
+- `POST /inspections/upload` là endpoint Pi upload ảnh alignment/inspection, hiện vẫn dành cho device agent trong mạng nội bộ.
