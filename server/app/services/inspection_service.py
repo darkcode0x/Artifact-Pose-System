@@ -235,6 +235,7 @@ class InspectionService:
 
         # ── SIFT alignment + full SSIM analysis (requires reference image) ──
         aligned_img: Any = None
+        crop_regions: list[dict] = []  # populated in SSIM block, consumed by YOLO block
         if reference_path is not None and reference_path.exists():
             try:
                 import numpy as np
@@ -311,6 +312,43 @@ class InspectionService:
                     damage_pct = (damage_area / max(valid_area, 1)) * 100.0
                     result["damage_pct"] = round(damage_pct, 2)
 
+                    # ── Crop từng vùng hư hại → đưa vào AI ────────────────
+                    # NGƯỠNG tổng thể: chỉ crop khi damage_pct >= 0.5%.
+                    #   Dưới ngưỡng này → contour chỉ là nhiễu alignment/ánh sáng, bỏ qua.
+                    # NGƯỠNG cấp contour: min_area đã lọc ở trên.
+                    # padding=0 vì bbox đã có padding 30% sẵn; không cần double-pad.
+                    _crop_dir = self._artifact_uploads_dir / artifact_id
+                    _crop_dir.mkdir(parents=True, exist_ok=True)
+                    if damage_pct >= 0.5:
+                        _sorted_contours = sorted(big_contours, key=cv2.contourArea, reverse=True)
+                        for _idx, _contour in enumerate(_sorted_contours):
+                            _bx, _by, _bw, _bh = cv2.boundingRect(_contour)
+                            _side = max(_bw, _bh)
+                            _pad = max(40, int(_side * 0.3))
+                            _half = (_side // 2) + _pad
+                            _cxc = _bx + _bw // 2
+                            _cyc = _by + _bh // 2
+                            _x1c = max(0, _cxc - _half)
+                            _y1c = max(0, _cyc - _half)
+                            _x2c = min(w, _cxc + _half)
+                            _y2c = min(h, _cyc + _half)
+                            if _x2c - _x1c < 40 or _y2c - _y1c < 40:
+                                continue
+                            _crop_arr = source[_y1c:_y2c, _x1c:_x2c]
+                            _crop_fname = f"crop_{artifact_id}_{ts_ms}_{_idx}.jpg"
+                            cv2.imwrite(str(_crop_dir / _crop_fname), _crop_arr)
+                            _r_ssim = self._compute_region_ssim(
+                                source, reference_img, _x1c, _y1c, _x2c, _y2c, padding=0
+                            )
+                            crop_regions.append({
+                                "index": _idx,
+                                "crop_path": f"/uploads/artifacts/{artifact_id}/{_crop_fname}",
+                                "region_bbox": [_x1c, _y1c, _x2c, _y2c],
+                                "region_ssim": round(float(_r_ssim), 4),
+                                "area_pct": round(float(cv2.contourArea(_contour)) / max(valid_area, 1) * 100, 2),
+                                "_crop_arr": _crop_arr,  # temp — removed before JSON serialization
+                            })
+
                     # Save heatmap
                     heatmap_filename = f"heatmap_{artifact_id}_{ts_ms}.jpg"
                     heatmap_dir = self._artifact_uploads_dir / artifact_id
@@ -332,57 +370,107 @@ class InspectionService:
         else:
             result["auto_description"] = "No reference image — AI detection only."
 
-        # ── YOLO detection + annotated image ─────────────────────────────────
+        # ── YOLO detection per crop → map bboxes back to original image ─────
+        # Nếu có crop_regions (có reference): YOLO chạy trên từng crop,
+        #   tọa độ bbox được cộng offset (x1c, y1c) về ảnh gốc.
+        # Nếu không có reference (không SSIM): YOLO chạy trên ảnh gốc như thường.
         try:
-            yolo_result = self._model_service.detect_image(
-                self._settings.default_ai_model_name,
-                current_path.read_bytes(),
-            )
-
             _SEVERITY_COLOR = {
                 "HIGH":   (0,   0,   255),
                 "MEDIUM": (0,   128, 255),
                 "LOW":    (0,   200, 128),
             }
-            annotated = current_img.copy()
+            # Annotate trên ảnh đã align (nếu có), để bbox khớp với SSIM diff map
+            annotate_base = aligned_img if aligned_img is not None else current_img
+            annotated = annotate_base.copy()
             all_dets: list[dict] = []
-            for res_item in (yolo_result or []):
-                for det in res_item.get("detections", []):
-                    all_dets.append(det)
-                    x1, y1, x2, y2 = [int(v) for v in det["bbox_xyxy"]]
-                    name = str(det.get("class_name", "unknown"))
-                    conf = float(det.get("confidence", 0))
-                    if conf >= 0.65:
-                        severity = "HIGH"
-                    elif conf >= 0.40:
-                        severity = "MEDIUM"
-                    else:
-                        severity = "LOW"
-                    color = _SEVERITY_COLOR[severity]
-                    # Per-region SSIM enriches label when reference is available
-                    region_ssim_val: float | None = None
-                    if result.get("ssim") is not None:
-                        try:
-                            import numpy as np
-                            reference_img_for_region = cv2.imread(str(reference_path))
-                            src_for_region = aligned_img if aligned_img is not None else current_img
-                            if reference_img_for_region is not None:
-                                region_ssim_val = self._compute_region_ssim(
-                                    src_for_region, reference_img_for_region, x1, y1, x2, y2
-                                )
-                        except Exception:
-                            pass
-                    label = f"{name} {conf*100:.0f}%"
-                    if region_ssim_val is not None:
-                        label += f" (SSIM {region_ssim_val*100:.0f}%)"
-                    thickness = 3 if severity == "HIGH" else 2
-                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
-                    font_scale = 0.50
-                    (tw, th), bl = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
-                    y_top = max(0, y1 - th - bl - 4)
-                    cv2.rectangle(annotated, (x1, y_top), (x1 + tw + 4, y1), color, -1)
-                    cv2.putText(annotated, label, (x1 + 2, y1 - bl - 2),
-                                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), 1, cv2.LINE_AA)
+
+            if crop_regions:
+                # ── Có SSIM crops: chạy YOLO trên từng crop ──────────────
+                for _crop in crop_regions:
+                    _x1c, _y1c, _x2c, _y2c = _crop["region_bbox"]
+                    _crop_arr = _crop.pop("_crop_arr", None)
+                    if _crop_arr is None:
+                        # fallback: đọc lại từ disk (vừa lưu xong)
+                        _disk_path = self._artifact_uploads_dir / artifact_id / Path(_crop["crop_path"]).name
+                        _crop_arr = cv2.imread(str(_disk_path))
+                    if _crop_arr is None:
+                        continue
+
+                    # Encode crop → bytes để đưa vào model service
+                    _, _enc = cv2.imencode(".jpg", _crop_arr)
+                    _crop_dets_raw = self._model_service.detect_image(
+                        self._settings.default_ai_model_name,
+                        _enc.tobytes(),
+                    )
+                    _crop_det_list: list[dict] = []
+                    for _res in (_crop_dets_raw or []):
+                        for _det in _res.get("detections", []):
+                            _crop_det_list.append(_det)
+
+                    # Lưu kết quả AI vào từng crop region để Flutter hiển thị
+                    _crop["detections"] = [
+                        {k: v for k, v in _d.items() if k != "bbox_xyxy"}
+                        for _d in _crop_det_list
+                    ]
+
+                    # Map tọa độ bbox từ không gian crop → ảnh gốc
+                    for _det in _crop_det_list:
+                        _cb = [int(v) for v in _det["bbox_xyxy"]]
+                        x1 = _x1c + _cb[0]
+                        y1 = _y1c + _cb[1]
+                        x2 = _x1c + _cb[2]
+                        y2 = _y1c + _cb[3]
+                        _name = str(_det.get("class_name", "unknown"))
+                        _conf = float(_det.get("confidence", 0))
+                        _severity = "HIGH" if _conf >= 0.65 else "MEDIUM" if _conf >= 0.40 else "LOW"
+                        _color = _SEVERITY_COLOR[_severity]
+                        _r_ssim_val = _crop.get("region_ssim")
+                        _label = f"{_name} {_conf*100:.0f}%"
+                        if _r_ssim_val is not None:
+                            _label += f" (SSIM {_r_ssim_val*100:.0f}%)"
+                        _thickness = 3 if _severity == "HIGH" else 2
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), _color, _thickness)
+                        _fs = 0.50
+                        (_tw, _th), _bl = cv2.getTextSize(_label, cv2.FONT_HERSHEY_SIMPLEX, _fs, 1)
+                        _yt = max(0, y1 - _th - _bl - 4)
+                        cv2.rectangle(annotated, (x1, _yt), (x1 + _tw + 4, y1), _color, -1)
+                        cv2.putText(annotated, _label, (x1 + 2, y1 - _bl - 2),
+                                    cv2.FONT_HERSHEY_SIMPLEX, _fs, (255, 255, 255), 1, cv2.LINE_AA)
+                        all_dets.append({
+                            **{k: v for k, v in _det.items() if k != "bbox_xyxy"},
+                            "bbox_xyxy": [x1, y1, x2, y2],  # tọa độ ảnh gốc
+                            "crop_path": _crop["crop_path"],
+                            "crop_region_ssim": _r_ssim_val,
+                            "severity": _severity,
+                        })
+            else:
+                # ── Không có reference → YOLO trên ảnh gốc (fallback) ────
+                _yolo_raw = self._model_service.detect_image(
+                    self._settings.default_ai_model_name,
+                    current_path.read_bytes(),
+                )
+                for _res in (_yolo_raw or []):
+                    for _det in _res.get("detections", []):
+                        x1, y1, x2, y2 = [int(v) for v in _det["bbox_xyxy"]]
+                        _name = str(_det.get("class_name", "unknown"))
+                        _conf = float(_det.get("confidence", 0))
+                        _severity = "HIGH" if _conf >= 0.65 else "MEDIUM" if _conf >= 0.40 else "LOW"
+                        _color = _SEVERITY_COLOR[_severity]
+                        _label = f"{_name} {_conf*100:.0f}%"
+                        _thickness = 3 if _severity == "HIGH" else 2
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), _color, _thickness)
+                        _fs = 0.50
+                        (_tw, _th), _bl = cv2.getTextSize(_label, cv2.FONT_HERSHEY_SIMPLEX, _fs, 1)
+                        _yt = max(0, y1 - _th - _bl - 4)
+                        cv2.rectangle(annotated, (x1, _yt), (x1 + _tw + 4, y1), _color, -1)
+                        cv2.putText(annotated, _label, (x1 + 2, y1 - _bl - 2),
+                                    cv2.FONT_HERSHEY_SIMPLEX, _fs, (255, 255, 255), 1, cv2.LINE_AA)
+                        all_dets.append({**_det, "severity": _severity})
+
+            # Xóa _crop_arr tạm trước khi JSON serialization
+            for _cr in crop_regions:
+                _cr.pop("_crop_arr", None)
 
             detect_dir = self._artifact_uploads_dir / artifact_id
             detect_dir.mkdir(parents=True, exist_ok=True)
@@ -394,7 +482,8 @@ class InspectionService:
             result["detections_json"] = json.dumps({
                 "annotated_path": annotated_url,
                 "aligned_path": result.get("aligned_image_path"),
-                "results": yolo_result,
+                "all_detections": all_dets,
+                "crops": crop_regions,
                 "ssim_summary": {
                     "ssim": result.get("ssim"),
                     "ssim_gray": result.get("ssim_gray"),
