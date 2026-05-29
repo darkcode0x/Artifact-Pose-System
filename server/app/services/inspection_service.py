@@ -387,8 +387,7 @@ class InspectionService:
 
             if crop_regions:
                 # ── Có SSIM crops: chạy YOLO trên từng crop ──────────────
-                for _crop in crop_regions:
-                    _x1c, _y1c, _x2c, _y2c = _crop["region_bbox"]
+                for _crop in crop_regions:                    _x1c, _y1c, _x2c, _y2c = _crop["region_bbox"]
                     _crop_arr = _crop.pop("_crop_arr", None)
                     if _crop_arr is None:
                         # fallback: đọc lại từ disk (vừa lưu xong)
@@ -445,7 +444,8 @@ class InspectionService:
                             "severity": _severity,
                         })
             else:
-                # ── Không có reference → YOLO trên ảnh gốc (fallback) ────
+                # ── Không có crop (damage_pct < 0.5% HOẶC không có reference)
+                # → YOLO chạy trên ảnh gốc/aligned như fallback ────────────
                 _yolo_raw = self._model_service.detect_image(
                     self._settings.default_ai_model_name,
                     current_path.read_bytes(),
