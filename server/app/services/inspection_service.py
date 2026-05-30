@@ -303,7 +303,9 @@ class InspectionService:
 
                     # Contours + damage %
                     contours, _ = cv2.findContours(damage_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    min_area = max(500, (h * w) * 0.0005)
+                    # 0.0001 factor: catches circles ~33px+ diameter on 4K images (area ≥ 829px²)
+                    # Old value 0.0005 (4147px²) was too large — missed small but real damage spots
+                    min_area = max(500, (h * w) * 0.0001)
                     big_contours = [c for c in contours if cv2.contourArea(c) > min_area]
                     cv2.drawContours(heatmap_overlay, big_contours, -1, (0, 0, 255), 2)
 
@@ -321,7 +323,8 @@ class InspectionService:
                     _crop_dir.mkdir(parents=True, exist_ok=True)
                     if damage_pct >= 0.5:
                         _sorted_contours = sorted(big_contours, key=cv2.contourArea, reverse=True)
-                        for _idx, _contour in enumerate(_sorted_contours):
+                        # Cap at 20 crops to limit YOLO call count on very noisy images
+                        for _idx, _contour in enumerate(_sorted_contours[:20]):
                             _bx, _by, _bw, _bh = cv2.boundingRect(_contour)
                             _side = max(_bw, _bh)
                             _pad = max(40, int(_side * 0.3))

@@ -6,6 +6,7 @@ data/visualization/
 # Env local - container dung .env.docker qua docker-compose
 .env
 .env.example
+env.docker.example
 
 # Python cache
 __pycache__/
@@ -13,6 +14,22 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Local compiled .so (Docker build lai tu source qua cpp-builder stage)
+# Neu de vao context, COPY . . se copy vao image roi bi COPY --from=cpp-builder ghi de - lang phi
+app/modules/artifact_pose/*.so
+
+# Native C++ local build artifacts (Docker tu build trong builder stage)
+native/pose_solver_cpp/build/
+
+# Docker infra files - khong can trong Python app container
+Dockerfile
+docker-compose.yml
+docker/
+
+# Docs & metadata
+README.md
+*.md
 
 # Git
 .git/
