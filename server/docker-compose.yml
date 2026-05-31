@@ -52,7 +52,7 @@ services:
       AUTO_DISPATCH_POSE_COMMAND: ${AUTO_DISPATCH_POSE_COMMAND:-true}
       RUN_AI_ON_ALIGNED_IMAGE: ${RUN_AI_ON_ALIGNED_IMAGE:-true}
       DEFAULT_AI_MODEL_NAME: ${DEFAULT_AI_MODEL_NAME:-default}
-      DEFAULT_AI_MODEL_PATH: ${DEFAULT_AI_MODEL_PATH:-}
+      DEFAULT_AI_MODEL_PATH: best_Quyen.pt
       # Hardcode postgres service hostname — do not use ${AUTH_DATABASE_URL} substitution
       # because server/.env (dung cho local) dung 127.0.0.1 se ghi de va lam mat ket noi.
       AUTH_DATABASE_URL: postgresql+psycopg://artifact:${POSTGRES_PASSWORD:-artifact123}@postgres:5432/${POSTGRES_DB:-artifact_auth}

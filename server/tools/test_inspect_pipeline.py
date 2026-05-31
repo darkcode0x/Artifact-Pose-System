@@ -123,6 +123,33 @@ def build_damage_mask(diff_uint8):
     return damage_mask
 
 
+def nms_detections(dets, iou_threshold=0.5):
+    """Suppress duplicate boxes across crop specs: keep highest-conf box per overlapping group (same class)."""
+    if not dets:
+        return dets
+    dets_sorted = sorted(dets, key=lambda d: d["confidence"], reverse=True)
+    kept = []
+    suppressed = set()
+    for i, d in enumerate(dets_sorted):
+        if i in suppressed:
+            continue
+        kept.append(d)
+        bx1, by1, bx2, by2 = d["bbox_xyxy"]
+        for j in range(i + 1, len(dets_sorted)):
+            if j in suppressed:
+                continue
+            if dets_sorted[j]["class_name"] != d["class_name"]:
+                continue
+            cx1, cy1, cx2, cy2 = dets_sorted[j]["bbox_xyxy"]
+            ix1, iy1 = max(bx1, cx1), max(by1, cy1)
+            ix2, iy2 = min(bx2, cx2), min(by2, cy2)
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            union = (bx2 - bx1) * (by2 - by1) + (cx2 - cx1) * (cy2 - cy1) - inter
+            if union > 0 and inter / union > iou_threshold:
+                suppressed.add(j)
+    return kept
+
+
 def yolo_detect_bytes(model, img_arr, conf=0.05):
     """Run YOLO on a numpy image array, return list of detection dicts."""
     import cv2
@@ -162,6 +189,7 @@ def run_pipeline(
     otsu_fallback: int = 60,
     sift_lowe: float = 0.65,
     sift_min_matches: int = 15,
+    mode: str = "baseline",  # "baseline" | "hybrid"
 ):
     import cv2
     import numpy as np
@@ -183,22 +211,39 @@ def run_pipeline(
     h, w = reference_img.shape[:2]
     cur_resized = cv2.resize(current_img, (w, h)) if current_img.shape[:2] != (h, w) else current_img.copy()
 
-    # ── STEP 1: SIFT Alignment ──────────────────────────────────────────────
+    # ── STEP 1: Alignment ───────────────────────────────────────────────────
+    # YOLO always crops from the original pre-aligned image (yolo_source).
+    # SSIM diff map / contour detection uses ssim_source:
+    #   baseline → ssim_source = cur_resized  (no SIFT, direct comparison)
+    #   hybrid   → ssim_source = SIFT-warped  (more precise diff map)
     print("\n" + "="*60)
-    print("STEP 1 — SIFT Alignment")
+    print(f"STEP 1 — Alignment  [mode: {mode.upper()}]")
     print("="*60)
-    aligned_img, valid_mask, inliers = sift_align_with_mask(cur_resized, reference_img)
-    if aligned_img is not None:
-        aligned_path = out_dir / f"aligned_{artifact_id}_{ts_ms}.jpg"
-        cv2.imwrite(str(aligned_path), aligned_img)
-        print(f"  Aligned image saved: {aligned_path}")
-    source = aligned_img if aligned_img is not None else cur_resized
+    aligned_img  = None
+    valid_mask   = None
+    aligned_path = None
+    yolo_source  = cur_resized  # YOLO always runs on the original pre-aligned image
+
+    if mode == "hybrid":
+        print("  [HYBRID] Running SIFT to compute precise diff map...")
+        aligned_img, valid_mask, _inliers = sift_align_with_mask(cur_resized, reference_img)
+        if aligned_img is not None:
+            aligned_path = out_dir / f"aligned_{artifact_id}_{ts_ms}.jpg"
+            cv2.imwrite(str(aligned_path), aligned_img)
+            print(f"  SIFT-aligned image saved: {aligned_path}")
+        ssim_source = aligned_img if aligned_img is not None else cur_resized
+        print("  ssim_source = SIFT-aligned  |  yolo_source = original pre-aligned")
+    else:
+        # Baseline: SSIM directly on pre-aligned image, no auto-alignment
+        print("  [BASELINE] No SIFT — using pre-aligned image directly.")
+        ssim_source = cur_resized
+        print("  ssim_source = yolo_source = original pre-aligned")
 
     # ── STEP 2: Multi-channel SSIM ──────────────────────────────────────────
     print("\n" + "="*60)
     print("STEP 2 — Multi-channel SSIM")
     print("="*60)
-    ssim_score, ssim_gray, ssim_color, diff_uint8 = compute_multi_ssim(source, reference_img, valid_mask)
+    ssim_score, ssim_gray, ssim_color, diff_uint8 = compute_multi_ssim(ssim_source, reference_img, valid_mask)
     print(f"  SSIM (weighted)  : {ssim_score:.4f} ({ssim_score*100:.1f}%)")
     print(f"  SSIM gray        : {ssim_gray:.4f}")
     print(f"  SSIM color       : {ssim_color:.4f}")
@@ -207,7 +252,7 @@ def run_pipeline(
     heatmap = cv2.applyColorMap(diff_uint8, cv2.COLORMAP_JET)
     if valid_mask is not None:
         heatmap[cv2.bitwise_not(valid_mask) > 0] = [128, 128, 128]
-    heatmap_overlay = cv2.addWeighted(source, 0.6, heatmap, 0.4, 0)
+    heatmap_overlay = cv2.addWeighted(ssim_source, 0.6, heatmap, 0.4, 0)
     heatmap_path = out_dir / f"heatmap_{artifact_id}_{ts_ms}.jpg"
     cv2.imwrite(str(heatmap_path), heatmap_overlay)
     print(f"  Heatmap saved   : {heatmap_path}")
@@ -255,7 +300,7 @@ def run_pipeline(
         "LOW":    (0,   200, 128),
     }
 
-    annotated = source.copy()
+    annotated = yolo_source.copy()  # annotations drawn on original pre-aligned image
     all_dets = []
     crop_regions = []
 
@@ -279,57 +324,106 @@ def run_pipeline(
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
             all_dets.append({**_det, "severity": _severity})
     else:
+        # ── Crop specs per mode ──────────────────────────────────────────────
+        # baseline : single crop, 30% padding  (original behaviour, no change)
+        # hybrid   : tight (20% pad) + wide (70% pad), YOLO on both, then NMS merge
+        #   tight → sharp/local defects: peel, scratch, writing_marks
+        #   wide  → diffuse defects that need context: burn_mark, stain, material_loss
+        if mode == "hybrid":
+            # (label, pad_factor, min_pad_px)
+            crop_specs = [("tight", 0.30, 40), ("wide", 0.70, 120)]
+            _CROP_OUTLINE = {"tight": (0, 255, 255), "wide": (0, 128, 255)}
+        else:
+            crop_specs = [("single", 0.30, 40)]
+            _CROP_OUTLINE = {"single": (255, 180, 0)}
+
         sorted_contours = sorted(big_contours, key=cv2.contourArea, reverse=True)
-        print(f"  Processing {len(sorted_contours[:50])} crop(s) (cap=50)...")
+        print(f"  Processing {len(sorted_contours[:50])} contour(s) (cap=50), "
+              f"{len(crop_specs)} crop spec(s) per ROI  [{mode.upper()}]...")
+
         for idx, contour in enumerate(sorted_contours[:50]):
             _bx, _by, _bw, _bh = cv2.boundingRect(contour)
             _side = max(_bw, _bh)
-            _pad = max(40, int(_side * 0.3))
-            _half = (_side // 2) + _pad
-            _cxc = _bx + _bw // 2
-            _cyc = _by + _bh // 2
-            _x1c = max(0, _cxc - _half)
-            _y1c = max(0, _cyc - _half)
-            _x2c = min(w, _cxc + _half)
-            _y2c = min(h, _cyc + _half)
-            if _x2c - _x1c < 40 or _y2c - _y1c < 40:
-                print(f"  Crop {idx}: too small, skipped.")
-                continue
+            _cxc  = _bx + _bw // 2
+            _cyc  = _by + _bh // 2
 
-            crop_arr = source[_y1c:_y2c, _x1c:_x2c]
-            crop_fname = out_dir / f"crop_{artifact_id}_{ts_ms}_{idx}.jpg"
-            cv2.imwrite(str(crop_fname), crop_arr)
+            contour_dets  = []   # projected full-image detections from all specs (before NMS)
+            primary_ssim  = 1.0
+            primary_bbox  = [0, 0, 0, 0]
+            primary_cpath = None
 
-            # Region SSIM (padding=0 — bbox already has 30% padding)
-            from skimage.metrics import structural_similarity
-            _ci = cv2.cvtColor(crop_arr, cv2.COLOR_BGR2GRAY)
-            _cr = cv2.cvtColor(reference_img[_y1c:_y2c, _x1c:_x2c], cv2.COLOR_BGR2GRAY)
-            _win = min(7, min(_ci.shape) - 1)
-            if _win % 2 == 0: _win -= 1
-            _r_ssim = float(structural_similarity(_cr, _ci, win_size=_win)) if _win >= 3 else 1.0
+            for spec_label, pad_factor, min_pad in crop_specs:
+                _pad  = max(min_pad, int(_side * pad_factor))
+                _half = (_side // 2) + _pad
+                _x1c  = max(0, _cxc - _half)
+                _y1c  = max(0, _cyc - _half)
+                _x2c  = min(w, _cxc + _half)
+                _y2c  = min(h, _cyc + _half)
+                if _x2c - _x1c < 40 or _y2c - _y1c < 40:
+                    print(f"  Contour {idx} [{spec_label}]: too small, skipped.")
+                    continue
 
-            print(f"\n  Crop {idx}: bbox=[{_x1c},{_y1c},{_x2c},{_y2c}]  "
-                  f"size={_x2c-_x1c}×{_y2c-_y1c}  region_ssim={_r_ssim:.4f}")
+                crop_arr   = yolo_source[_y1c:_y2c, _x1c:_x2c]
+                crop_fname = out_dir / f"crop_{artifact_id}_{ts_ms}_{idx}_{spec_label}.jpg"
+                cv2.imwrite(str(crop_fname), crop_arr)
 
-            # YOLO on this crop
-            dets = yolo_detect_bytes(yolo_model, crop_arr, conf=yolo_conf)
-            print(f"    YOLO detections in crop: {len(dets)}")
-            for d in dets:
-                print(f"      {d['class_name']:20s}  conf={d['confidence']:.3f}  "
-                      f"bbox={d['bbox_xyxy']}")
+                # Region SSIM
+                from skimage.metrics import structural_similarity
+                _ci  = cv2.cvtColor(crop_arr, cv2.COLOR_BGR2GRAY)
+                _cr  = cv2.cvtColor(reference_img[_y1c:_y2c, _x1c:_x2c], cv2.COLOR_BGR2GRAY)
+                _win = min(7, min(_ci.shape) - 1)
+                if _win % 2 == 0: _win -= 1
+                _r_ssim = float(structural_similarity(_cr, _ci, win_size=_win)) if _win >= 3 else 1.0
 
+                # First spec is the primary (drives the crop summary entry)
+                if primary_cpath is None:
+                    primary_ssim  = _r_ssim
+                    primary_bbox  = [_x1c, _y1c, _x2c, _y2c]
+                    primary_cpath = crop_fname
+
+                print(f"\n  Contour {idx} [{spec_label}]: "
+                      f"bbox=[{_x1c},{_y1c},{_x2c},{_y2c}]  "
+                      f"size={_x2c-_x1c}×{_y2c-_y1c}  region_ssim={_r_ssim:.4f}")
+
+                # YOLO on this crop
+                dets = yolo_detect_bytes(yolo_model, crop_arr, conf=yolo_conf)
+                print(f"    YOLO detections [{spec_label}]: {len(dets)}")
+                for d in dets:
+                    print(f"      {d['class_name']:20s}  conf={d['confidence']:.3f}  "
+                          f"bbox={d['bbox_xyxy']}")
+
+                # Project to full-image coordinates and collect
+                for _det in dets:
+                    _cb = _det["bbox_xyxy"]
+                    contour_dets.append({
+                        "class_name":  _det["class_name"],
+                        "confidence":  _det["confidence"],
+                        "bbox_xyxy":   [_x1c + _cb[0], _y1c + _cb[1],
+                                        _x1c + _cb[2], _y1c + _cb[3]],
+                        "from_crop":   spec_label,
+                        "region_ssim": round(_r_ssim, 4),
+                    })
+
+                # Draw crop region outline (colour encodes spec)
+                cv2.rectangle(annotated, (_x1c, _y1c), (_x2c, _y2c),
+                              _CROP_OUTLINE[spec_label], 1)
+
+            # ── NMS across crop specs for this contour ───────────────────────
+            if len(crop_specs) > 1 and contour_dets:
+                _before = len(contour_dets)
+                contour_dets = nms_detections(contour_dets, iou_threshold=0.45)
+                print(f"  Contour {idx}: NMS {_before} → {len(contour_dets)} detection(s)")
+
+            # ── Draw surviving detections ────────────────────────────────────
             crop_det_list = []
-            for _det in dets:
-                _cb = _det["bbox_xyxy"]
-                x1 = _x1c + _cb[0]
-                y1 = _y1c + _cb[1]
-                x2 = _x1c + _cb[2]
-                y2 = _y1c + _cb[3]
-                _conf = _det["confidence"]
-                _name = _det["class_name"]
+            for _det in contour_dets:
+                x1, y1, x2, y2 = _det["bbox_xyxy"]
+                _conf     = _det["confidence"]
+                _name     = _det["class_name"]
                 _severity = "HIGH" if _conf >= 0.65 else "MEDIUM" if _conf >= 0.40 else "LOW"
-                _color = _SEVERITY_COLOR[_severity]
-                _label = f"{_name} {_conf*100:.0f}% (SSIM {_r_ssim*100:.0f}%)"
+                _color    = _SEVERITY_COLOR[_severity]
+                _tag      = f"[{_det['from_crop']}] " if mode == "hybrid" else ""
+                _label    = f"{_tag}{_name} {_conf*100:.0f}% (SSIM {_det['region_ssim']*100:.0f}%)"
                 _thickness = 3 if _severity == "HIGH" else 2
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), _color, _thickness)
                 (_tw, _th), _bl = cv2.getTextSize(_label, cv2.FONT_HERSHEY_SIMPLEX, 0.50, 1)
@@ -337,26 +431,29 @@ def run_pipeline(
                 cv2.rectangle(annotated, (x1, _yt), (x1+_tw+4, y1), _color, -1)
                 cv2.putText(annotated, _label, (x1+2, y1-_bl-2),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255,255,255), 1, cv2.LINE_AA)
-                crop_det_list.append({"class_name": _name, "confidence": _conf})
-                all_dets.append({
+                crop_det_list.append({
                     "class_name": _name,
                     "confidence": _conf,
-                    "bbox_xyxy": [x1, y1, x2, y2],
-                    "crop_path": str(crop_fname),
-                    "crop_region_ssim": round(_r_ssim, 4),
-                    "severity": _severity,
+                    "from_crop":  _det["from_crop"],
+                })
+                all_dets.append({
+                    "class_name":       _name,
+                    "confidence":       _conf,
+                    "bbox_xyxy":        [x1, y1, x2, y2],
+                    "crop_path":        str(primary_cpath) if primary_cpath else "",
+                    "crop_region_ssim": _det["region_ssim"],
+                    "from_crop":        _det["from_crop"],
+                    "severity":         _severity,
                 })
 
-            # Also draw crop region rectangle on annotated image (dashed-style: 2-pixel blue)
-            cv2.rectangle(annotated, (_x1c, _y1c), (_x2c, _y2c), (255, 180, 0), 1)
-
             crop_regions.append({
-                "index": idx,
-                "crop_path": str(crop_fname),
-                "region_bbox": [_x1c, _y1c, _x2c, _y2c],
-                "region_ssim": round(_r_ssim, 4),
-                "area_pct": round(float(cv2.contourArea(contour)) / max(valid_area, 1) * 100, 3),
-                "detections": crop_det_list,
+                "index":           idx,
+                "crop_path":       str(primary_cpath) if primary_cpath else "",
+                "region_bbox":     primary_bbox,
+                "region_ssim":     round(primary_ssim, 4),
+                "area_pct":        round(float(cv2.contourArea(contour)) / max(valid_area, 1) * 100, 3),
+                "detections":      crop_det_list,
+                "crop_specs_used": [s[0] for s in crop_specs],
             })
 
     detect_path = out_dir / f"detect_{artifact_id}_{ts_ms}.jpg"
@@ -388,6 +485,7 @@ def run_pipeline(
 
     # ── FINAL REPORT ────────────────────────────────────────────────────────
     report = {
+        "pipeline_mode": mode,
         "ssim_summary": {
             "ssim": round(ssim_score, 4),
             "ssim_gray": round(ssim_gray, 4),
@@ -413,6 +511,7 @@ def run_pipeline(
     print(f"  Damage %        : {damage_pct:.3f}%")
     print(f"  Crop regions    : {len(crop_regions)}")
     print(f"  AI detections   : {len(all_dets)}")
+    print(f"  Mode            : {mode.upper()}")
     print(f"  Status          : {final_status}")
     print(f"\n  Output dir      : {out_dir}")
     print(f"  Annotated image : {detect_path}")
@@ -456,6 +555,9 @@ Tuning guide:
     parser.add_argument("--otsu-fallback",type=int,   default=60,
                         dest="otsu_fallback",
                         help="Hard pixel threshold when Otsu<30 (default 60)")
+    parser.add_argument("--mode",          type=str,   default="both",
+                        choices=["baseline", "hybrid", "both"],
+                        help="Pipeline mode: baseline (no SIFT), hybrid (SIFT for diff only), both (default)")
     args = parser.parse_args()
 
     ref_path  = Path(args.reference)
@@ -468,13 +570,23 @@ Tuning guide:
             print(f"ERROR: {name} file not found: {p}", file=sys.stderr)
             sys.exit(1)
 
-    run_pipeline(
-        ref_path, cur_path, mdl_path, out_path,
+    _pipeline_kwargs = dict(
         yolo_conf=args.conf,
         min_area_factor=args.min_area,
         damage_pct_threshold=args.damage_pct,
         otsu_fallback=args.otsu_fallback,
     )
+    if args.mode == "both":
+        for _mode_name in ("baseline", "hybrid"):
+            _out = out_path / _mode_name
+            print(f"\n{'#'*60}")
+            print(f"# Running mode: {_mode_name.upper()}")
+            print(f"{'#'*60}")
+            run_pipeline(ref_path, cur_path, mdl_path, _out,
+                         mode=_mode_name, **_pipeline_kwargs)
+    else:
+        run_pipeline(ref_path, cur_path, mdl_path, out_path,
+                     mode=args.mode, **_pipeline_kwargs)
 
 
 if __name__ == "__main__":

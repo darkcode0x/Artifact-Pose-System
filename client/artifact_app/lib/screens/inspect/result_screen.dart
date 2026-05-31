@@ -11,7 +11,6 @@ const _clsLabel = {
   'material_loss': 'Material Loss',
   'peel': 'Peeling',
   'scratch': 'Scratch',
-  'fold': 'Fold / Deformation',
   'writing_marks': 'Writing Marks',
   'dirt': 'Dirt',
   'staning': 'Staining',
@@ -403,7 +402,6 @@ class _DetectTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final detections = inspection.detections;
-    final crops = inspection.cropRegions;
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -435,10 +433,6 @@ class _DetectTab extends StatelessWidget {
         ),
         const SizedBox(height: 20),
         _buildDetectionList(context, detections),
-        if (crops.isNotEmpty) ...[
-          const SizedBox(height: 20),
-          _buildDamageRegions(context, crops),
-        ],
         const SizedBox(height: 24),
       ],
     );
@@ -480,351 +474,63 @@ class _DetectTab extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         ...detections.map((detection) {
-          final rawName = detection['class_name']?.toString() ?? '';
-          final name = _clsLabel[rawName] ?? rawName;
+          final rawName   = detection['class_name']?.toString() ?? '';
+          final name      = _clsLabel[rawName] ?? rawName;
           final confidence =
               ((detection['confidence'] as num?)?.toDouble() ?? 0.0) * 100;
-          final cropPath = detection['crop_path']?.toString();
-          final cropRegionSsim =
-              (detection['crop_region_ssim'] as num?)?.toDouble();
+          final regionSsim =
+              (detection['region_ssim'] as num?)?.toDouble();
           final confColor = confidence >= 65
               ? AppColors.statusDamaged
               : confidence >= 40
                   ? AppColors.statusWarning
                   : AppColors.statusNeedCheck;
-          final hasCrop = cropPath != null && cropPath.isNotEmpty;
 
           return Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(10),
-              onTap: hasCrop
-                  ? () => _showCropDetail(
-                        context,
-                        cropPath: cropPath,
-                        title: name.isNotEmpty ? name : 'Damage',
-                        regionSsim: cropRegionSsim,
-                        damageType: name.isNotEmpty ? name : null,
-                        confidence: confidence,
-                      )
-                  : null,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                  color: confColor.withOpacity(0.07),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: confColor.withOpacity(0.25)),
-                ),
-                child: Row(
-                  children: [
-                    if (hasCrop) ...[
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(6),
-                        child: SizedBox(
-                          width: 52,
-                          height: 52,
-                          child: Image.network(
-                            ApiConfig.resolveAssetUrl(cropPath),
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(
-                              color: AppColors.surfaceMuted,
-                              child: const Icon(
-                                Icons.image_not_supported_outlined,
-                                size: 20,
-                                color: AppColors.textFaint,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                    ] else ...[
-                      Icon(Icons.warning_amber_rounded, size: 18, color: confColor),
-                      const SizedBox(width: 10),
-                    ],
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            name.isNotEmpty ? name : 'Unknown',
-                            style: const TextStyle(fontWeight: FontWeight.w500),
-                          ),
-                          if (cropRegionSsim != null)
-                            Text(
-                              'Region Similarity: ${(cropRegionSsim * 100).toStringAsFixed(1)}%',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: AppColors.textMuted,
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      mainAxisSize: MainAxisSize.min,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: confColor.withOpacity(0.07),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: confColor.withOpacity(0.25)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, size: 18, color: confColor),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '${confidence.toStringAsFixed(1)}%',
-                          style: TextStyle(
-                            color: confColor,
-                            fontWeight: FontWeight.bold,
-                          ),
+                          name.isNotEmpty ? name : 'Unknown',
+                          style: const TextStyle(fontWeight: FontWeight.w500),
                         ),
-                        if (hasCrop)
-                          const Icon(
-                            Icons.chevron_right,
-                            size: 14,
-                            color: AppColors.textFaint,
+                        if (regionSsim != null)
+                          Text(
+                            'Region Similarity: ${(regionSsim * 100).toStringAsFixed(1)}%',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppColors.textMuted,
+                            ),
                           ),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                  Text(
+                    '${confidence.toStringAsFixed(1)}%',
+                    style: TextStyle(
+                      color: confColor,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
               ),
             ),
           );
         }),
       ],
-    );
-  }
-
-  Widget _buildDamageRegions(
-      BuildContext context, List<Map<String, dynamic>> crops) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Row(
-          children: [
-            Icon(Icons.crop_free, size: 15, color: AppColors.primary),
-            SizedBox(width: 6),
-            Text(
-              'SSIM Damage Regions',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'Areas with structural differences detected. Tap to inspect.',
-          style: TextStyle(fontSize: 11, color: AppColors.textFaint),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 114,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: crops.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 8),
-            itemBuilder: (_, i) {
-              final crop = crops[i];
-              final cropPath = crop['crop_path']?.toString();
-              final regionSsim = (crop['region_ssim'] as num?)?.toDouble();
-              final areaPct = (crop['area_pct'] as num?)?.toDouble();
-              // Lấy top AI detection trong crop region này (nếu có)
-              final cropDets = (crop['detections'] as List<dynamic>? ?? [])
-                  .map((d) => Map<String, dynamic>.from(d as Map))
-                  .toList();
-              final topDet = cropDets.isEmpty
-                  ? null
-                  : cropDets.reduce((a, b) =>
-                      ((a['confidence'] as num?)?.toDouble() ?? 0) >=
-                              ((b['confidence'] as num?)?.toDouble() ?? 0)
-                          ? a
-                          : b);
-              final topType = topDet != null
-                  ? (_clsLabel[topDet['class_name']?.toString() ?? ''] ??
-                      topDet['class_name']?.toString())
-                  : null;
-              final topConf = topDet != null
-                  ? ((topDet['confidence'] as num?)?.toDouble() ?? 0.0) * 100
-                  : null;
-              final ssimColor = regionSsim == null
-                  ? AppColors.textMuted
-                  : regionSsim < 0.70
-                      ? AppColors.statusDamaged
-                      : regionSsim < 0.85
-                          ? Colors.orange
-                          : AppColors.statusGood;
-              return GestureDetector(
-                onTap: cropPath != null && cropPath.isNotEmpty
-                    ? () => _showCropDetail(
-                          context,
-                          cropPath: cropPath,
-                          title: 'Region ${i + 1}',
-                          regionSsim: regionSsim,
-                          areaPct: areaPct,
-                          damageType: topType,
-                          confidence: topConf,
-                        )
-                    : null,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: SizedBox(
-                        width: 80,
-                        height: 80,
-                        child: cropPath != null && cropPath.isNotEmpty
-                            ? Image.network(
-                                ApiConfig.resolveAssetUrl(cropPath),
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => Container(
-                                  color: AppColors.surfaceMuted,
-                                  child: const Icon(
-                                      Icons.broken_image_outlined,
-                                      size: 24,
-                                      color: AppColors.textFaint),
-                                ),
-                              )
-                            : Container(
-                                color: AppColors.surfaceMuted,
-                                child: const Icon(Icons.crop_free,
-                                    size: 24, color: AppColors.textFaint),
-                              ),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    if (regionSsim != null)
-                      Text(
-                        '${(regionSsim * 100).toStringAsFixed(0)}%',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: ssimColor,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  static void _showCropDetail(
-    BuildContext context, {
-    required String cropPath,
-    required String title,
-    double? regionSsim,
-    double? areaPct,
-    String? damageType,
-    double? confidence,
-  }) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
-        final ssimColor = regionSsim == null
-            ? AppColors.textMuted
-            : regionSsim < 0.70
-                ? AppColors.statusDamaged
-                : regionSsim < 0.85
-                    ? Colors.orange
-                    : AppColors.statusGood;
-        return DraggableScrollableSheet(
-          initialChildSize: 0.62,
-          maxChildSize: 0.92,
-          minChildSize: 0.4,
-          builder: (_, controller) => Container(
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-            ),
-            child: Column(
-              children: [
-                Container(
-                  margin: const EdgeInsets.only(top: 10),
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade300,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 10, 8, 0),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          title,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.bold, fontSize: 16),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: () => Navigator.pop(ctx),
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: ListView(
-                    controller: controller,
-                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 32),
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: AspectRatio(
-                          aspectRatio: 1,
-                          child: Image.network(
-                            ApiConfig.resolveAssetUrl(cropPath),
-                            fit: BoxFit.contain,
-                            loadingBuilder: (_, child, progress) =>
-                                progress == null
-                                    ? child
-                                    : const Center(
-                                        child: CircularProgressIndicator()),
-                            errorBuilder: (_, __, ___) =>
-                                _imagePlaceholder(Icons.broken_image_outlined),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      if (damageType != null && damageType.isNotEmpty) ...[
-                        _MetaRow(label: 'Type', value: damageType),
-                        const Divider(height: 20),
-                      ],
-                      if (confidence != null) ...[
-                        _MetaRow(
-                          label: 'AI Confidence',
-                          value: '${confidence.toStringAsFixed(1)}%',
-                          valueColor: confidence >= 65
-                              ? AppColors.statusDamaged
-                              : confidence >= 40
-                                  ? AppColors.statusWarning
-                                  : null,
-                        ),
-                        const Divider(height: 20),
-                      ],
-                      if (regionSsim != null) ...[
-                        _MetaRow(
-                          label: 'Region Similarity',
-                          value: '${(regionSsim * 100).toStringAsFixed(1)}%',
-                          valueColor: ssimColor,
-                        ),
-                        const Divider(height: 20),
-                      ],
-                      if (areaPct != null)
-                        _MetaRow(
-                          label: 'Area',
-                          value: '${areaPct.toStringAsFixed(2)}% of image',
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 }
