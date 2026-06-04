@@ -13,6 +13,8 @@ class DeviceIdRequest(BaseModel):
 class DeviceIdResponse(BaseModel):
     ok: bool
     device_id: str
+    device_code: str
+    db_device_id: str | None = None
     machine_hash: str
 
 
@@ -75,6 +77,7 @@ class DeviceAcksResponse(BaseModel):
 
 class DeviceSummary(BaseModel):
     device_id: str
+    device_code: str
     machine_hash: str
     status: dict[str, Any] | None = None
 

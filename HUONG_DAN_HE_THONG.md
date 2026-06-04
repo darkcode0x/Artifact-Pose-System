@@ -1,655 +1,859 @@
-# Hướng Dẫn Sử Dụng Hệ Thống Artifact Pose System
+# Hướng Dẫn Hệ Thống Artifact Pose System
 
-> Phiên bản: 1.0 — Cập nhật: 27/04/2026
-
----
-
-## Mục lục
-
-1. [Tổng quan hệ thống](#1-tổng-quan-hệ-thống)
-2. [Yêu cầu phần cứng và phần mềm](#2-yêu-cầu-phần-cứng-và-phần-mềm)
-3. [Cấu hình mạng](#3-cấu-hình-mạng)
-4. [Khởi động Server (PC/WSL2)](#4-khởi-động-server-pcwsl2)
-5. [Cấu hình Raspberry Pi](#5-cấu-hình-raspberry-pi)
-6. [Cài đặt App Mobile](#6-cài-đặt-app-mobile)
-7. [Tài khoản người dùng](#7-tài-khoản-người-dùng)
-8. [Quy trình sử dụng đầu đến cuối](#8-quy-trình-sử-dụng-đầu-đến-cuối)
-9. [Marker ChArUco — Yêu cầu vật lý](#9-marker-charuco--yêu-cầu-vật-lý)
-10. [Chi tiết chức năng app](#10-chi-tiết-chức-năng-app)
-11. [Kiểm tra và gỡ lỗi](#11-kiểm-tra-và-gỡ-lỗi)
-12. [Cấu trúc file quan trọng](#12-cấu-trúc-file-quan-trọng)
+> Cập nhật: 28/05/2026
+> Tài liệu này mô tả cách hệ thống đang hoạt động theo source code hiện tại, bao gồm server, mobile app, Raspberry Pi device agent, pose workflow, AI inspection, tài khoản và dữ liệu runtime.
 
 ---
 
-## 1. Tổng quan hệ thống
+## 1. Tổng Quan
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      PC (Windows + WSL2)                    │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Docker Compose                                       │   │
-│  │  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐ │   │
-│  │  │  PostgreSQL  │  │   FastAPI    │  │  Mosquitto  │ │   │
-│  │  │  :5432       │  │   :8000      │  │  MQTT :1883 │ │   │
-│  │  └─────────────┘  └──────────────┘  └─────────────┘ │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                             │
-│  WiFi Home: 192.168.0.102    Hotspot: 192.168.137.1         │
-└─────────────────────────────────────────────────────────────┘
-         │ WiFi Home (192.168.0.x)        │ PC Hotspot
-         ▼                                ▼
-┌─────────────────┐              ┌─────────────────────┐
-│  Mobile Phone   │              │   Raspberry Pi      │
-│  Android App    │              │   device_agent      │
-│  192.168.0.100  │              │   → :8000 và :1883  │
-└─────────────────┘              └─────────────────────┘
-```
+Artifact Pose System là hệ thống kiểm tra hiện vật bằng camera và cơ cấu điều khiển trên Raspberry Pi. Hệ thống dùng golden pose để căn chỉnh camera/thiết bị về vị trí tham chiếu, sau đó chạy kiểm tra ảnh bằng SSIM và model AI.
 
-**Luồng hoạt động:**
-1. App Mobile gửi lệnh workflow đến Server qua REST API
-2. Server publish lệnh qua MQTT → Raspberry Pi nhận
-3. Pi chụp ảnh và upload lên Server
-4. Server xử lý pose + AI detection → trả kết quả về app
+Các thành phần chính:
 
----
+| Thành phần | Thư mục | Vai trò |
+|---|---|---|
+| FastAPI server | `server/` | REST API, auth, DB, MQTT bridge, pose service, AI inspection |
+| PostgreSQL | Docker service `postgres` | Lưu user, artifact, schedule, image, comparison, alert, device |
+| Mosquitto MQTT | Docker service `mosquitto` | Gửi lệnh tới Pi và nhận ACK/status |
+| Flutter app | `client/artifact_app/` | Giao diện Android cho admin/operator |
+| Raspberry Pi agent | `embed/device_agent/` | Nhận lệnh MQTT, điều khiển camera/servo/slider, upload ảnh |
+| AI model | `model/` | Model YOLO `.pt`, tự mount vào `/app/model` trong container |
 
-## 2. Yêu cầu phần cứng và phần mềm
+Luồng tổng thể:
 
-### PC (máy chủ)
-- Windows 10/11 với WSL2 (Ubuntu 22.04)
-- Docker Desktop (v24+)
-- Python 3.10+ (trong WSL2)
-- ADB (Android Debug Bridge) để cài app
-
-### Raspberry Pi
-- Raspberry Pi 4B trở lên
-- Camera module (Pi Camera v2 hoặc HQ Camera)
-- Slider cơ (stepper motor + driver)
-- Servo pan/tilt
-- Python 3.10+
-- Thư viện: `paho-mqtt`, `requests`, `picamera2`
-
-### Điện thoại Android
-- Android 8.0 trở lên
-- Cùng mạng WiFi gia đình với PC
-- (Không cần cùng mạng với Pi)
-
-### Phần mềm
-- Flutter SDK 3.29.3+
-- Docker Compose v2
-
----
-
-## 3. Cấu hình mạng
-
-### Bảng IP
-
-| Thiết bị | Mạng | IP | Kết nối tới |
-|---|---|---|---|
-| PC — WiFi Home | Home WiFi | `192.168.0.102` | Mobile → Server |
-| PC — Hotspot | PC Mobile Hotspot | `192.168.137.1` | Pi → Server + MQTT |
-| Raspberry Pi | PC Hotspot | `192.168.137.x` | `192.168.137.1:8000` |
-| Mobile Phone | Home WiFi | `192.168.0.100` | `192.168.0.102:8000` |
-| Docker (WSL2) | Internal | `0.0.0.0:8000` | Lắng nghe tất cả |
-
-### Kiểm tra IP PC
-
-```bash
-# Trên WSL2 / Terminal
-cmd.exe /c "ipconfig" | grep "IPv4" | grep -v "169.254"
-```
-
-Kết quả mong đợi:
-```
-IPv4 Address: 192.168.0.102    ← WiFi Home (mobile dùng cái này)
-IPv4 Address: 192.168.137.1   ← Hotspot (Pi dùng cái này)
-```
-
-> ⚠️ **Lưu ý:** Nếu IP WiFi Home của PC thay đổi, cần rebuild lại APK với IP mới.
-
----
-
-## 4. Khởi động Server (PC/WSL2)
-
-### Lần đầu tiên (setup)
-
-```bash
-cd ~/System/Artifact-Pose-System/server
-
-# 1. Copy file env mẫu
-cp env.docker.example .env
-
-# 2. (Tùy chọn) Sửa mật khẩu trong .env
-# ADMIN_USERNAME=admin
-# ADMIN_PASSWORD=123456
-
-# 3. Build và khởi động
-docker compose build
-docker compose up -d
-```
-
-### Các lần sau (start bình thường)
-
-```bash
-cd ~/System/Artifact-Pose-System/server
-docker compose up -d
-```
-
-### Kiểm tra server đang chạy
-
-```bash
-# Kiểm tra containers
-docker compose ps
-
-# Kiểm tra health endpoint
-curl http://localhost:8000/health
-
-# Kiểm tra MQTT kết nối
-curl http://localhost:8000/mqtt/health
-```
-
-Kết quả mong đợi:
-```json
-{"status": "ok", "mqtt_connected": true, "ai_model_loaded": true}
-```
-
-### Dừng server
-
-```bash
-docker compose down
-```
-
-### Xem logs
-
-```bash
-# Xem logs real-time
-docker compose logs -f server
-
-# Xem 50 dòng cuối
-docker compose logs --tail=50 server
+```text
+Mobile App
+  -> REST API
+FastAPI Server
+  -> MQTT cmd/{device_code}
+Raspberry Pi Agent
+  -> chụp ảnh / di chuyển phần cứng
+  -> MQTT ack/{device_code}, status/{device_code}
+  -> upload ảnh qua HTTP
+FastAPI Server
+  -> pose correction / AI inspection / lưu DB
+Mobile App
+  -> xem kết quả
 ```
 
 ---
 
-## 5. Cấu hình Raspberry Pi
+## 2. Cấu Trúc Dự Án Quan Trọng
 
-### File cấu hình: `embed/device_agent/.env`
+```text
+Artifact-Pose-System/
+├── HUONG_DAN_DEPLOY_USB.md              Hướng dẫn deploy PC, Android, Pi
+├── HUONG_DAN_HE_THONG.md                Tài liệu hệ thống này
+├── PROJECT_AUDIT_REPORT.md              Báo cáo audit cấu trúc dự án
+├── model/
+│   └── new-10-05-best.pt                Model AI hiện có
+├── scripts/
+│   ├── attach_android_usb.ps1           Attach Android USB vào WSL và adb reverse
+│   └── wsl_adb_setup.sh                 Tạo adb reverse trong WSL
+├── server/
+│   ├── docker-compose.yml               Postgres + Mosquitto + FastAPI
+│   ├── Dockerfile                       Build runtime và native pose solver
+│   ├── .env.docker                      Env chạy Docker
+│   ├── env.docker.example               Env mẫu
+│   ├── app/
+│   │   ├── api/routes/                  REST API routes
+│   │   ├── models/                      SQLAlchemy models
+│   │   ├── schemas/                     Pydantic schemas
+│   │   ├── services/                    Business services
+│   │   └── modules/artifact_pose/       Pose initialization/correction
+│   ├── data/
+│   │   ├── device_registry.json         Registry device Pi
+│   │   ├── camera_params/               Camera calibration theo lens position
+│   │   ├── uploads/                     Ảnh upload, golden poses, artifact images
+│   │   └── logs/                        MQTT và inspection JSONL logs
+│   └── tools/
+│       ├── create_admin.py              Tạo/cập nhật admin bootstrap
+│       ├── list_users.py                Liệt kê user
+│       └── smoke_test_api_mqtt_ack.py   Smoke test API + MQTT + ACK
+├── client/artifact_app/
+│   ├── lib/services/api_config.dart     Base URL cho app
+│   ├── lib/services/api_client.dart     HTTP client có Bearer token
+│   └── lib/screens/                     Màn hình app
+└── embed/device_agent/
+    ├── .env                             Env của Pi agent
+    ├── api_client.py                    HTTP client của Pi
+    ├── main_app.py                      Launcher tương thích cũ
+    └── runtime/main_app.py              Main loop MQTT + phần cứng
+```
+
+---
+
+## 3. Khái Niệm Cốt Lõi
+
+### 3.1. Artifact
+
+Artifact là hiện vật cần kiểm tra. Mỗi artifact có:
+
+- `artifact_id`: ID chuỗi 6 ký tự.
+- `name`, `description`, `location`.
+- `status`: trạng thái hiện vật.
+- `baseline_image_id`: ảnh tham chiếu/baseline đang dùng để so sánh.
+- lịch sử inspection và alert.
+
+### 3.2. Golden Pose
+
+Golden pose là tư thế chuẩn của camera so với artifact. Hệ thống tạo golden pose bằng một cặp ảnh stereo left/right và marker ChArUco.
+
+Golden pose được lưu theo artifact:
+
+```text
+server/data/uploads/golden_poses/{artifact_id}/golden_pose.yaml
+server/data/uploads/golden_poses/{artifact_id}/golden_pose_descriptors.npy
+```
+
+Nếu hệ thống thấy file golden pose kiểu cũ ở vị trí global, `PoseService` có logic migrate sang thư mục per-artifact.
+
+### 3.3. Device
+
+Hiện tại hệ thống theo mô hình registry-driven device.
+
+- Pi gọi `POST /api/v1/devices/get_device_id` khi khởi động.
+- Server dùng `server/data/device_registry.json` để cấp hoặc trả lại mã thiết bị.
+- Server upsert record vào bảng `iot_devices`.
+- App hiển thị thiết bị từ DB, nhưng thao tác vận hành dùng `device_code`.
+
+Quy ước:
+
+| Tên | Ý nghĩa |
+|---|---|
+| `device_id` | ID nội bộ DB, chuỗi 6 ký tự |
+| `device_code` | Mã Pi/MQTT, ví dụ `dev-bbb742d369` |
+| `machine_hash` | Fingerprint Pi dùng để map sang `device_code` |
+
+Thiết bị hiện tại:
+
+```text
+device_code = dev-bbb742d369
+```
+
+### 3.4. Baseline Stereo
+
+Baseline stereo đã được khóa cố định:
+
+| Tham số | Giá trị |
+|---|---:|
+| Baseline vật lý | `100.0 mm` |
+| Stepper scale | `800 steps/mm` |
+| Slider move cho stereo | `80000 steps` |
+| Pose solver baseline | `0.10 m` |
+
+App không còn ô nhập baseline. API `start-initialization` không nhận `baseline_mm` hoặc `steps_per_mm`. Pi cũng bỏ qua baseline từ command và luôn dùng 80000 steps.
+
+---
+
+## 4. Auth, Role Và Bảo Vệ Route
+
+### 4.1. Role
+
+Hệ thống có 2 role chính:
+
+| Role | Quyền |
+|---|---|
+| `admin` | Quản lý user, artifact, device workflow, schedule, model, profile |
+| `operator` | Sử dụng dashboard, artifact, schedule, device workflow, profile |
+
+User `is_active=false` không thể đăng nhập và token của user inactive cũng bị chặn.
+
+### 4.2. Tài Khoản Mặc Định
+
+Docker startup chạy:
+
+```text
+tools/create_admin.py --username ${ADMIN_USERNAME:-admin} --password ${ADMIN_PASSWORD:-123456} --role admin
+```
+
+Mặc định dev:
+
+```text
+username: admin
+password: 123456
+role: admin
+```
+
+Không có operator mặc định bắt buộc trong source hiện tại. Có thể tạo operator bằng màn hình Users của admin, bằng `/api/v1/users`, hoặc self-register qua `/api/v1/auth/register`.
+
+### 4.3. Nhóm Route Chính
+
+| Route | Auth hiện tại | Ghi chú |
+|---|---|---|
+| `GET /`, `GET /health` | Public | Health check |
+| `GET /mqtt/health`, `GET /mqtt/events` | Public | Debug MQTT trong LAN |
+| `POST /api/v1/auth/login` | Public | Trả JWT |
+| `POST /api/v1/auth/register` | Public | Tự tạo operator |
+| `/api/v1/users/*` | JWT, nhiều route admin-only | Quản lý user |
+| `/api/v1/artifacts/*` | JWT | Artifact, reference, inspection từ app |
+| `/api/v1/schedules/*` | JWT | Lịch kiểm tra |
+| `GET /api/v1/devices` | JWT | Danh sách thiết bị |
+| `POST /api/v1/devices/get_device_id` | Public cho Pi | Đăng ký/lấy `device_code` |
+| `/api/v1/devices/{device_code}/status` | Public trong LAN | Status realtime từ command service |
+| `/api/v1/devices/{device_code}/acks` | Public trong LAN | ACK history |
+| `/api/v1/devices/{device_code}/queue_move` | Public trong LAN | Gửi lệnh MQTT tới Pi |
+| `/workflows/{device_code}/*` | JWT | Start capture/alignment/initialization |
+| `/pose/health`, `/pose/correct`, `/pose/golden-pose/...` | JWT | Pose manual/status |
+| `POST /pose/initialize_golden` | JWT hoặc registered device | Pi upload stereo pair |
+| `POST /inspections/upload` | Public cho Pi trong LAN | Pi upload ảnh alignment/inspection |
+| `/models/*` | JWT; load/delete admin-only | Quản lý/chạy model |
+
+Lưu ý bảo mật: một số endpoint device/Pi vẫn public trong LAN để không phá luồng Pi agent. Không mở server trực tiếp ra Internet khi chưa thêm device token/MQTT auth/firewall.
+
+---
+
+## 5. Cấu Hình Server
+
+File Docker env chính:
+
+```text
+server/.env.docker
+```
+
+Các nhóm cấu hình quan trọng:
 
 ```env
-# Kết nối server qua PC Hotspot
+# Database
+POSTGRES_DB=artifact_auth
+POSTGRES_USER=artifact
+POSTGRES_PASSWORD=artifact123
+
+# Bootstrap admin
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=123456
+AUTH_SECRET_KEY=CHANGE_ME_AUTH_SECRET
+AUTH_ACCESS_TOKEN_EXPIRE_MINUTES=60
+
+# MQTT
+MQTT_HOST=mosquitto
+MQTT_PORT=1883
+MQTT_CMD_TOPIC_TEMPLATE=cmd/{device_id}
+MQTT_ACK_TOPIC_TEMPLATE=ack/{device_id}
+MQTT_STATUS_TOPIC_TEMPLATE=status/{device_id}
+
+# Pose/camera
+ARTIFACT_LENS_POSITION=1.5
+MAX_ALIGNMENT_ITERATIONS=7
+ALIGNMENT_TIMEOUT_SEC=300
+
+# Chiều correction phần cứng
+SIGN_MOVE_X=1
+SIGN_MOVE_Z=1
+SIGN_ROTATE_PAN=-1
+SIGN_ROTATE_TILT=-1
+```
+
+Docker Compose mount:
+
+```text
+server/data -> /app/data
+model       -> /app/model
+```
+
+Camera params mặc định theo lens:
+
+```text
+server/data/camera_params/camera_params_lens_1.5.yaml
+```
+
+---
+
+## 6. Raspberry Pi Device Agent
+
+### 6.1. Cấu Hình `.env`
+
+File:
+
+```text
+embed/device_agent/.env
+```
+
+Ví dụ:
+
+```env
+DEVICE_ID=
+USE_SERVER_DEVICE_ID=true
 SERVER_BASE_URL=http://192.168.137.1:8000
 
-# MQTT qua PC Hotspot
 MQTT_HOST=192.168.137.1
 MQTT_PORT=1883
 
-# Device ID (để trống → tự đăng ký với server)
-DEVICE_ID=
-USE_SERVER_DEVICE_ID=true
-
-# Artifact mặc định
+IMAGE_DIR=./data/pictures
 DEFAULT_ARTIFACT_ID=artifact_demo_001
-
-# Camera
 LENS_POSITION=1.5
 
-# Lưu ảnh
-IMAGE_DIR=./data/pictures
+SLIDER_FAST_RATIO=0.85
+SLIDER_FAST_PULSE_DELAY_SEC=0.00035
+SLIDER_SLOW_PULSE_DELAY_SEC=0.0008
+AUTO_CAPTURE_AFTER_MOVE=true
 ```
 
-### Chạy device agent trên Pi
+Nếu `DEVICE_ID` để trống và `USE_SERVER_DEVICE_ID=true`, Pi tự tính `machine_hash` và xin `device_code` từ server.
+
+### 6.2. Chạy Agent
 
 ```bash
-cd embed/device_agent
+cd /home/pi/Artifact-Pose-System/embed/device_agent
 PYTHONPATH=. python3 runtime/main_app.py
-
 ```
 
-### Kiểm tra Pi đã kết nối
-
-Khi Pi khởi động thành công, terminal hiển thị:
-```
-[MQTT] Connected to 192.168.137.1:1883
-[APP] Device ID: dev-bbb742d369
-[APP] Listening for commands on: cmd/dev-bbb742d369
-```
-
----
-
-## 6. Cài đặt App Mobile
-
-### Yêu cầu trước khi build
-
-- Flutter SDK 3.29.3+
-- ADB kết nối với điện thoại qua WiFi:
-  ```bash
-  adb connect 192.168.0.100:5555
-  adb devices  # xác nhận thấy device
-  ```
-
-### Build và cài APK
+Hoặc:
 
 ```bash
-cd ~/System/Artifact-Pose-System/client/artifact_app
-
-# Build APK với IP server
-flutter build apk --release \
-  --dart-define=API_BASE_URL=http://192.168.0.102:8000 \
-  -t lib/main.dart
-
-# Cài lên điện thoại
-adb -s 192.168.0.100:5555 install -r \
-  build/app/outputs/flutter-apk/app-release.apk
+PYTHONPATH=. python3 main_app.py
 ```
 
-> ⚠️ **Thay `192.168.0.102`** bằng IP WiFi Home thực tế của PC nếu khác.
+### 6.3. MQTT Topics
 
-### Chạy trực tiếp (debug mode)
+Với `device_code=dev-bbb742d369`, topic là:
+
+```text
+cmd/dev-bbb742d369       Server -> Pi
+ack/dev-bbb742d369       Pi -> Server
+status/dev-bbb742d369    Pi -> Server
+```
+
+Pi gửi heartbeat status định kỳ để app biết thiết bị online/offline.
+
+### 6.4. Phần Cứng Điều Khiển
+
+Mặc định trong `hardware_controller.py`:
+
+| Thành phần | Giá trị |
+|---|---|
+| Servo pan channel | `0` |
+| Servo tilt channel | `1` |
+| Home yaw | `110°` |
+| Home pitch | `50°` |
+| X PUL/DIR | GPIO `17` / `27` |
+| Z PUL/DIR | GPIO `22` / `23` |
+| Microstep | `32` |
+
+Khi khởi động, Pi đưa servo về home. Khi capture stereo/golden pose, Pi cũng đưa servo về home trước khi chụp.
+
+---
+
+## 7. Mobile App
+
+Flutter app nằm tại:
+
+```text
+client/artifact_app/
+```
+
+Base URL được resolve trong:
+
+```text
+client/artifact_app/lib/services/api_config.dart
+```
+
+Ưu tiên cấu hình khi build:
 
 ```bash
-flutter run -d 192.168.0.100:5555 \
-  --dart-define=API_BASE_URL=http://192.168.0.102:8000
+--dart-define=API_BASE_URL=http://<server-ip>:8000
 ```
+
+Nếu không truyền `--dart-define`, app dùng `_pcIp` hardcode trong `api_config.dart`.
+
+Các màn hình chính:
+
+| Màn hình | Chức năng |
+|---|---|
+| Login | Đăng nhập JWT |
+| Operator Dashboard | Tổng quan artifact, alert, device, schedule, profile |
+| Admin Dashboard | Tổng quan và quản lý user |
+| Artifacts | Tạo/sửa/xóa artifact, reference image, inspection history |
+| IoT Devices | Danh sách Pi, trạng thái online, workflow |
+| Device Workflow | Capture reference, camera alignment, run inspection |
+| Schedule | Tạo/cập nhật/xóa lịch kiểm tra |
+| Alerts | Xem cảnh báo từ inspection |
+| Profile | Xem/sửa hồ sơ, đổi mật khẩu |
+| Users | Admin quản lý user |
 
 ---
 
-## 7. Tài khoản người dùng
+## 8. Quy Trình Sử Dụng Đầu Cuối
 
-| Tài khoản | Mật khẩu | Vai trò | Quyền |
-|---|---|---|---|
-| `admin` | `123456` | Admin | Toàn bộ + quản lý user |
-| `operator` | `operator123` | Operator | Dashboard, devices, artifacts |
+### Bước 1: Khởi Động Hạ Tầng
 
-### Đăng nhập
-
-Mở app → nhập username/password → nhấn **Login**.
-
-- **Admin** → vào **Admin Dashboard** (quản lý user, xem tất cả)
-- **Operator** → vào **Operator Dashboard** (điều khiển thiết bị, kiểm tra hiện vật)
-
-### Tạo thêm tài khoản (chỉ Admin)
-
-Từ PC terminal:
+Trên PC:
 
 ```bash
-# Lấy token admin
-TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"123456"}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-
-# Tạo tài khoản mới
-curl -X POST http://localhost:8000/api/v1/auth/register \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"username":"operator2","password":"pass123","role":"operator"}'
+cd /home/thepiece/System/Artifact-Pose-System/server
+docker compose --env-file .env.docker up -d
+curl http://127.0.0.1:8000/health
 ```
 
----
+Trên Pi:
 
-## 8. Quy trình sử dụng đầu đến cuối
-
-### Bước 0: Chuẩn bị
-
-1. ✅ Server đang chạy trên PC (`docker compose up -d`)
-2. ✅ Pi đang kết nối hotspot PC và chạy `device_agent`
-3. ✅ App đã cài trên điện thoại, đăng nhập bằng `operator`
-
----
-
-### Bước 1: Khởi tạo Golden Pose (Stereo Initialization)
-
-> **Mục đích:** Dạy cho hệ thống biết "tư thế chuẩn" của hiện vật.
-
-**Yêu cầu vật lý bắt buộc:**
-- In marker ChArUco (xem [Mục 9](#9-marker-charuco--yêu-cầu-vật-lý))
-- Đặt marker TRƯỚC hiện vật, trong tầm nhìn camera Pi
-
-**Trên app:**
-1. **Dashboard → Devices**
-2. Xác nhận **Device ID**: `dev-bbb742d369`
-3. Xác nhận **Artifact ID**: `artifact_demo_001`
-4. Đặt **Baseline (mm)**: `100` (khoảng cách slider di chuyển)
-5. Nhấn **Start Stereo Initialization**
-6. Chờ Pi di chuyển slider, chụp 2 ảnh (LEFT + RIGHT), upload lên server
-7. Server xử lý → tạo file `golden_pose.yaml`
-8. Kết quả hiển thị: ✓ Command sent
-
-**Điều gì xảy ra phía sau:**
-```
-App → POST /workflows/{device_id}/start-initialization
-Server → MQTT publish: action=capture_stereo_pair
-Pi nhận → chụp ảnh LEFT → di chuyển slider 100mm → chụp ảnh RIGHT
-Pi → POST /pose/initialize_golden (upload 2 ảnh)
-Server → detect_diamond() + ORB matching + triangulate → lưu golden_pose.yaml
+```bash
+cd /home/pi/Artifact-Pose-System/embed/device_agent
+PYTHONPATH=. python3 runtime/main_app.py
 ```
 
-> ⚠️ **Lỗi 400?** Xem [Mục 9](#9-marker-charuco--yêu-cầu-vật-lý) — marker không được phát hiện trong ảnh.
+Trên Android:
 
----
+- Mở app đã build đúng `API_BASE_URL`.
+- Đăng nhập bằng admin/operator.
 
-### Bước 2: Căn chỉnh tư thế (Alignment)
+### Bước 2: Kiểm Tra Device
 
-> **Mục đích:** Tự động căn chỉnh Pi đến vị trí chuẩn so với golden pose.
+Trong app:
 
-**Điều kiện:** Bước 1 đã hoàn thành (có file `golden_pose.yaml`).
+1. Vào Dashboard.
+2. Chọn IoT Devices.
+3. Kiểm tra device `dev-bbb742d369`.
+4. Device cần online trước khi start workflow.
 
-**Trên app:**
-1. **Dashboard → Devices**
-2. Nhấn **Start Alignment**
-3. Hệ thống tự động lặp: chụp ảnh → tính độ lệch → gửi lệnh điều chỉnh motor
-4. Khi `within_tolerance = true` → dừng vòng lặp, AI chạy tự động
+Server xác định online bằng MQTT heartbeat trong khoảng gần nhất.
 
-**Điều gì xảy ra:**
+### Bước 3: Tạo Hoặc Chọn Artifact
+
+Trong app:
+
+1. Vào Artifacts.
+2. Tạo artifact mới hoặc chọn artifact có sẵn.
+3. Ghi nhớ artifact ID nếu cần debug qua API/log.
+
+### Bước 4: Capture Reference Image / Golden Pose
+
+Mục đích: tạo golden pose và ảnh baseline cho artifact.
+
+Điều kiện:
+
+- Pi online.
+- Camera hoạt động.
+- Marker ChArUco đúng chuẩn nằm rõ trong khung hình.
+- Artifact đã được chọn.
+
+Trong app:
+
+1. Vào IoT Devices.
+2. Chọn device.
+3. Chọn artifact.
+4. Nhấn Capture Reference Image.
+
+Luồng phía sau:
+
+```text
+App -> POST /workflows/{device_code}/start-initialization
+Server -> MQTT action=capture_stereo_pair
+Pi -> servo về home
+Pi -> chụp LEFT
+Pi -> slider X +80000 steps, tương ứng baseline cố định 100mm
+Pi -> chụp RIGHT
+Pi -> slider X -80000 steps về vị trí ban đầu
+Pi -> POST /pose/initialize_golden kèm left/right/artifact_id/device_code
+Server -> detect ChArUco diamond + ORB + triangulation
+Server -> lưu golden_pose.yaml per-artifact
+Server -> lưu ảnh golden left làm baseline image của artifact
 ```
-App → POST /workflows/{device_id}/start-alignment
-Server → MQTT: action=capture (auto_alignment_loop=true)
-Pi → chụp ảnh → POST /inspections/upload
-Server → pose_correction() → tính deviation
-  Nếu ngoài dung sai: MQTT → Pi điều chỉnh motor → lặp lại
-  Nếu trong dung sai: AI chạy → lưu kết quả
+
+Không có bước nhập baseline trên app. Baseline luôn là 10cm.
+
+### Bước 5: Camera Alignment
+
+Mục đích: căn chỉnh camera/thiết bị về tư thế gần golden pose.
+
+Trong app:
+
+1. Sau khi reference/golden pose đã có, nhấn Start Camera Alignment.
+2. Pi chụp ảnh alignment.
+3. Server chạy pose correction.
+4. Nếu chưa đạt tolerance, server gửi lệnh motor/servo về Pi.
+5. Pi di chuyển và tự capture lại nếu `AUTO_CAPTURE_AFTER_MOVE=true`.
+6. Lặp đến khi đạt tolerance, timeout, hoặc hết số vòng `MAX_ALIGNMENT_ITERATIONS`.
+
+Luồng phía sau:
+
+```text
+App -> POST /workflows/{device_code}/start-alignment
+Server -> MQTT action=capture, auto_alignment_loop=true
+Pi -> capture ảnh
+Pi -> POST /inspections/upload
+Server -> pose correction
+Server -> nếu lệch: publish movement command
+Pi -> move servo/slider
+Pi -> capture tiếp
+Server -> nếu đạt: ACK alignment_complete, lưu latest metadata
 ```
 
+### Bước 6: Run Inspection
+
+Sau alignment thành công:
+
+1. App gọi inspect-from-device cho artifact.
+2. Server lấy ảnh capture mới nhất của device.
+3. Server chạy kiểm tra so với baseline image.
+4. Server tạo `ImageComparison`.
+5. Nếu kết quả warning/damaged, server tạo `Alert`.
+
+Kết quả bao gồm:
+
+- ảnh hiện tại;
+- ảnh tham chiếu;
+- heatmap nếu có;
+- `damage_score`;
+- `ssim_score`;
+- trạng thái `good`, `warning`, hoặc `damaged`;
+- detections JSON nếu AI phát hiện.
+
+### Bước 7: Xem Kết Quả
+
+Trong app:
+
+1. Vào Artifacts.
+2. Chọn artifact.
+3. Xem inspection history.
+4. Vào Alerts để xem cảnh báo.
+
 ---
 
-### Bước 3: Xem kết quả kiểm tra
+## 9. Marker Và Camera
 
-**Trên app:**
-1. **Dashboard → Artifacts**
-2. Chọn hiện vật (vd: `artifact_demo_001`)
-3. Nhấn **Inspect** để xem kết quả mới nhất
-4. Xem: ảnh chụp, heatmap hư hỏng (nếu AI phát hiện), điểm số
-
----
-
-### Bước 4: Chụp ảnh thủ công (tùy chọn)
-
-**Trên app:**
-1. **Dashboard → Devices → Request Capture**
-2. Hoặc: **Artifacts → chọn hiện vật → Capture**
-
----
-
-### Bước 5: Xem cảnh báo
-
-- **Dashboard → Alerts**: Danh sách hiện vật có vấn đề phát hiện
-- Badge số đỏ hiển thị số cảnh báo hiện tại
-
----
-
-## 9. Marker ChArUco — Yêu cầu vật lý
-
-### Tại sao cần marker?
-
-Hệ thống dùng **ChArUco Diamond Board** để:
-- Xác định vị trí 3D chính xác của camera so với vật thể
-- Tính toán tư thế chuẩn (golden pose)
-
-### Thông số marker
+Pose module hiện dùng ChArUco diamond/board với thông số trong `common.py`:
 
 | Tham số | Giá trị |
+|---|---:|
+| Dictionary | `DICT_4X4_50` |
+| Board | `CharucoBoard((3, 3), ...)` |
+| Square length | `0.040 m` = `40 mm` |
+| Marker length | `0.025 m` = `25 mm` |
+| Stereo baseline solver | `0.10 m` |
+
+Yêu cầu vật lý:
+
+- Marker phải phẳng, không cong.
+- In đúng tỷ lệ thật, không scale-to-fit.
+- Marker nằm rõ trong ảnh left khi capture stereo.
+- Ánh sáng đủ, không bóng lóa.
+- Camera params phải khớp lens position đang dùng, hiện mặc định `1.5`.
+
+Nếu golden initialization lỗi `400`, kiểm tra trước:
+
+```bash
+ls -lh server/data/uploads/pose_init/
+docker compose --env-file server/.env.docker -f server/docker-compose.yml logs --tail=100 server
+```
+
+Thông báo thường gặp trong log:
+
+```text
+[initialize_golden] Diamond marker NOT detected in left image.
+[initialize_golden] Stereo triangulation failed...
+```
+
+---
+
+## 10. API Reference Tóm Tắt
+
+### Auth
+
+```text
+POST /api/v1/auth/login
+POST /api/v1/auth/register
+```
+
+Login:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}'
+```
+
+### Users
+
+```text
+GET    /api/v1/users/me
+PATCH  /api/v1/users/me
+POST   /api/v1/users/me/change-password
+GET    /api/v1/users
+POST   /api/v1/users
+GET    /api/v1/users/{user_id}
+PATCH  /api/v1/users/{user_id}
+DELETE /api/v1/users/{user_id}
+PATCH  /api/v1/users/{user_id}/toggle-active
+POST   /api/v1/users/{user_id}/reset-password
+```
+
+Các route list/create/delete/toggle/reset cần admin. Reset password đặt mật khẩu về `111111`.
+
+### Devices
+
+```text
+GET  /api/v1/devices
+POST /api/v1/devices/get_device_id
+POST /api/v1/devices/{device_code}/queue_move
+POST /api/v1/devices/{device_code}/move
+GET  /api/v1/devices/{device_code}/status
+GET  /api/v1/devices/{device_code}/acks
+```
+
+Không còn API tạo/sửa/xóa device thủ công.
+
+### Workflows
+
+```text
+POST /workflows/{device_code}/capture-request
+POST /workflows/{device_code}/start-alignment
+POST /workflows/{device_code}/start-initialization
+GET  /workflows/{device_code}/latest-capture-metadata
+```
+
+`start-initialization` body hợp lệ:
+
+```json
+{
+  "artifact_id": "abcdef",
+  "camera_overrides": {}
+}
+```
+
+Không gửi `baseline_mm` hoặc `steps_per_mm`.
+
+### Pose
+
+```text
+GET  /pose/health
+POST /pose/correct
+POST /pose/initialize_golden
+GET  /pose/golden-pose/{artifact_id}/status
+```
+
+`POST /pose/initialize_golden` nhận multipart:
+
+| Field | Ý nghĩa |
 |---|---|
-| Dictionary | `DICT_4X4_50` (ArUco 4×4) |
-| Board | 3×3 ChArUco |
-| Kích thước ô vuông | **40mm** |
-| Kích thước marker | **25mm** |
-| Kích thước tổng | ~120mm × 120mm |
+| `left_file` | Ảnh stereo left |
+| `right_file` | Ảnh stereo right |
+| `artifact_id` | Artifact cần tạo golden pose |
+| `device_id` hoặc `device_code` | Mã Pi trong registry nếu không dùng JWT |
 
-### File marker sẵn có
+### Artifacts
 
-File đã tạo sẵn: `server/data/diamond_marker_print.png`
-
-### Cách in
-
-1. Mở file `diamond_marker_print.png`
-2. In trên giấy trắng, **đảm bảo kích thước thực là 120mm × 120mm**
-   - Trong phần mềm in, bỏ chọn "Fit to page" / "Scale to fit"
-   - Đặt tỉ lệ 100%
-3. Dán lên bìa cứng phẳng (không bị cong)
-4. Đo lại: mỗi ô vuông phải đúng **40mm**
-
-### Vị trí đặt marker
-
-```
-┌──────────────────────────────────────┐
-│                                      │
-│      [HIỆN VẬT]                      │
-│                                      │
-│  ┌────────────┐                      │
-│  │  MARKER   │  ← đặt phẳng,        │
-│  │ (120×120) │    nhìn thấy rõ      │
-│  └────────────┘    từ camera         │
-│                                      │
-│                  [Pi Camera] ────►   │
-└──────────────────────────────────────┘
+```text
+GET    /api/v1/artifacts
+POST   /api/v1/artifacts
+GET    /api/v1/artifacts/{artifact_id}
+PATCH  /api/v1/artifacts/{artifact_id}
+DELETE /api/v1/artifacts/{artifact_id}
+POST   /api/v1/artifacts/{artifact_id}/reference
+POST   /api/v1/artifacts/{artifact_id}/inspect
+POST   /api/v1/artifacts/{artifact_id}/inspect-from-device
+GET    /api/v1/artifacts/{artifact_id}/inspections
 ```
 
-- Marker phải nằm trong tầm nhìn camera
-- Ánh sáng đủ, không bị lóa/tối
-- Marker không bị che khuất, không bị cong
+### Schedules
+
+```text
+GET    /api/v1/schedules
+POST   /api/v1/schedules
+PATCH  /api/v1/schedules/{schedule_id}
+DELETE /api/v1/schedules/{schedule_id}
+```
+
+`schedule_id` là chuỗi, không phải số nguyên.
+
+### Inspections Upload Từ Pi
+
+```text
+POST /inspections/upload
+```
+
+Pi gửi multipart gồm `file` và `metadata` JSON.
+
+### Models
+
+```text
+GET    /models
+POST   /models/load
+DELETE /models/{name}
+POST   /models/{name}/predict
+POST   /models/{name}/detect
+```
+
+`load` và `delete` cần admin.
 
 ---
 
-## 10. Chi tiết chức năng app
+## 11. Dữ Liệu Runtime
 
-### Operator Dashboard
+Các dữ liệu quan trọng trong `server/data/`:
 
-| Nút | Màn hình | Chức năng |
-|---|---|---|
-| Schedule | ScheduleScreen | Xem/tạo lịch kiểm tra định kỳ |
-| Artifacts | ArtifactListScreen | Danh sách hiện vật, chụp ảnh, lịch sử |
-| Alerts | AlertScreen | Hiện vật có cảnh báo hư hỏng |
-| Devices | DeviceControlScreen | Điều khiển Pi, gửi lệnh workflow |
+| Đường dẫn | Nội dung |
+|---|---|
+| `device_registry.json` | Map `machine_hash -> device_code` |
+| `camera_params/` | Camera calibration YAML |
+| `uploads/pose_init/` | Ảnh stereo left/right Pi upload |
+| `uploads/golden_poses/{artifact_id}/` | Golden pose per artifact |
+| `uploads/artifacts/{artifact_id}/` | Reference/inspection images |
+| `logs/mqtt_events.jsonl` | MQTT publish/status/ack events |
+| `logs/inspections_log.jsonl` | Log inspection upload |
 
-### Admin Dashboard
-
-- Quản lý tài khoản người dùng (thêm/xóa)
-- Xem tổng quan hệ thống
-
-### DeviceControlScreen (Devices)
-
-```
-┌─────────────────────────────────────────┐
-│ [MQTT: ● connected]                     │
-│                                         │
-│ Device ID:    [dev-bbb742d369        ]  │
-│ Artifact ID:  [artifact_demo_001     ]  │
-│ Baseline(mm): [100                   ]  │
-│                                         │
-│ [🔲 Start Stereo Initialization      ]  │
-│    Pi chụp cặp ảnh stereo → golden pose │
-│                                         │
-│ [⚡ Start Alignment                   ]  │
-│    Bắt đầu vòng căn chỉnh tự động      │
-│                                         │
-│ [📷 Request Capture                   ]  │
-│    Chụp ảnh alignment đơn lẻ            │
-│                                         │
-│ [ℹ️ Check Device Status               ]  │
-│    Xem trạng thái Pi                    │
-└─────────────────────────────────────────┘
-```
+PostgreSQL lưu trong Docker volume `postgres_data`. Nếu chạy `docker compose down` không có `-v`, DB vẫn còn. Nếu chạy `docker compose down -v`, DB sẽ bị xóa.
 
 ---
 
-## 11. Kiểm tra và gỡ lỗi
+## 12. Kiểm Tra Và Gỡ Lỗi
 
-### App không kết nối được server
+### 12.1. Server
 
 ```bash
-# Kiểm tra server đang chạy
-curl http://localhost:8000/health
-
-# Kiểm tra từ điện thoại — mở browser trên phone, vào:
-http://192.168.0.102:8000/health
-
-# Nếu không vào được:
-# 1. Kiểm tra Windows Firewall có chặn port 8000 không
-# 2. Kiểm tra IP PC: cmd.exe /c ipconfig
-# 3. Rebuild APK với đúng IP
+cd /home/thepiece/System/Artifact-Pose-System/server
+docker compose --env-file .env.docker ps
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/mqtt/health
+docker compose --env-file .env.docker logs --tail=100 server
 ```
 
-### Pi không nhận lệnh (MQTT disconnected)
+### 12.2. Auth
 
 ```bash
-# Kiểm tra MQTT health
-curl http://localhost:8000/mqtt/health
-
-# Nếu mqtt_connected = false:
-docker compose logs --tail=30 server | grep -i mqtt
-docker compose restart server
-
-# Kiểm tra Pi có kết nối không:
-# Xem log trên Pi terminal
+curl -X POST http://127.0.0.1:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}'
 ```
 
-### Lỗi 400 khi Stereo Initialization
+Nếu user bị inactive, login trả `403`.
 
-Nguyên nhân: `detect_diamond` không tìm thấy marker trong ảnh.
-
-Kiểm tra:
-1. ✅ Marker đã được in đúng kích thước (120×120mm)?
-2. ✅ Marker nằm trong khung hình camera?
-3. ✅ Ánh sáng đủ, không bị lóa?
-4. ✅ Marker phẳng, không bị cong?
-5. ✅ Pi đã chụp ảnh thành công (kiểm tra `server/data/uploads/pose_init/`)?
+### 12.3. Device Registry Và DB
 
 ```bash
-# Kiểm tra ảnh đã upload
-ls server/data/uploads/pose_init/
-
-# Xem log server
-docker compose logs --tail=50 server | grep -E "400|initialize|diamond"
-```
-
-### Kiểm tra ảnh stereo thủ công
-
-```bash
-docker exec artifact_server bash -c "
-python3 -c \"
-from pathlib import Path
-import cv2
-from app.modules.artifact_pose.common import load_camera_params
-from app.modules.artifact_pose.initialize import run_initialization
-from app.core.config import get_settings
-import sys; sys.path.insert(0, '/app')
-
-s = get_settings()
-K, D = load_camera_params(s.artifact_camera_params)
-d = Path('/app/data/uploads/pose_init')
-left = sorted(d.glob('*left*.png'))[-1]
-right = sorted(d.glob('*right*.png'))[-1]
-img_l = cv2.imread(str(left))
-img_r = cv2.imread(str(right))
-print('Left:', img_l.shape, '  Right:', img_r.shape)
-
-# Test detect diamond
-from app.modules.artifact_pose.common import detect_diamond
-result = detect_diamond(img_l, K, D)
-print('Diamond detected:', result is not None)
-\""
-```
-
-### Pi offline / không phản hồi
-
-```bash
-# Kiểm tra device registry
 cat server/data/device_registry.json
 
-# Ping Pi (nếu biết IP)
-ping 192.168.137.x
-
-# Kiểm tra MQTT topic qua mosquitto sub
-docker exec artifact_mosquitto mosquitto_sub -h localhost -t "status/#" -v
+docker exec -it artifact_postgres psql -U artifact -d artifact_auth \
+  -c "SELECT device_id, device_code, status, last_active_at FROM iot_devices;"
 ```
 
-### Reset toàn bộ data (cẩn thận)
+### 12.4. MQTT
 
 ```bash
-# Xóa golden pose (để init lại)
-rm server/data/golden_pose.yaml
-
-# Xóa ảnh stereo cũ
-rm -f server/data/uploads/pose_init/*.png
-
-# Restart server
-docker compose restart server
+docker exec -it artifact_mosquitto mosquitto_sub -h localhost -t "#" -v
 ```
 
----
-
-## 12. Cấu trúc file quan trọng
-
-```
-Artifact-Pose-System/
-│
-├── server/                          # FastAPI server
-│   ├── docker-compose.yml           # ← Cấu hình Docker
-│   ├── env.docker.example           # ← Mẫu file .env
-│   ├── .env                         # ← File env thực tế (tạo từ example)
-│   ├── data/
-│   │   ├── device_registry.json     # ← Danh sách device đã đăng ký
-│   │   ├── golden_pose.yaml         # ← Golden pose (tạo sau Stereo Init)
-│   │   ├── diamond_marker_print.png # ← Marker để in
-│   │   ├── camera_params/
-│   │   │   └── camera_params_lens_1.5.yaml  # ← Thông số camera Pi
-│   │   └── uploads/
-│   │       ├── pose_init/           # ← Ảnh stereo upload từ Pi
-│   │       └── aligned/             # ← Ảnh khi căn chỉnh thành công
-│   └── app/
-│       └── modules/artifact_pose/
-│           └── common.py            # ← Thông số marker (SQUARE=40mm, etc.)
-│
-├── embed/device_agent/              # Phần mềm chạy trên Pi
-│   ├── .env                         # ← SERVER_BASE_URL, MQTT_HOST
-│   ├── api_client.py                # ← HTTP client
-│   └── runtime/
-│       └── main_app.py              # ← Main loop + xử lý lệnh MQTT
-│
-├── client/artifact_app/             # Flutter mobile app
-│   ├── lib/
-│   │   ├── services/
-│   │   │   └── api_config.dart      # ← baseUrl = 192.168.0.102:8000
-│   │   └── screens/
-│   │       ├── dashboard/           # Màn hình chính operator
-│   │       ├── devices/             # ← DeviceControlScreen (mới)
-│   │       ├── artifact/            # Quản lý hiện vật
-│   │       ├── inspect/             # Xem kết quả
-│   │       ├── schedule/            # Lịch kiểm tra
-│   │       ├── alerts/              # Cảnh báo
-│   │       └── admin/               # Quản lý user (admin only)
-│   └── pubspec.yaml
-│
-└── model/
-    └── best_83_7pt_train_2604_testch.pt  # ← AI model (YOLO damage detection)
-```
-
----
-
-## Tóm tắt nhanh (Quick Reference)
+Gửi lệnh test nhỏ:
 
 ```bash
-# Khởi động server
-cd server && docker compose up -d
+curl -X POST http://127.0.0.1:8000/api/v1/devices/dev-bbb742d369/queue_move \
+  -H "Content-Type: application/json" \
+  -d '{"action":"move","yaw_delta":1.0,"pitch_delta":0.0,"x_steps":0,"z_steps":0,"x_dir":1,"z_dir":1}'
+```
 
-# Build + cài app (thay IP nếu cần)
+### 12.5. Flutter
+
+```bash
 cd client/artifact_app
-flutter build apk --release --dart-define=API_BASE_URL=http://192.168.0.102:8000 -t lib/main.dart
-adb -s 192.168.0.100:5555 install -r build/app/outputs/flutter-apk/app-release.apk
-
-# Kiểm tra health
-curl http://localhost:8000/health
-curl http://localhost:8000/mqtt/health
+flutter pub get
+flutter analyze
+flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
 ```
 
-```
-Tài khoản:
-  admin    / 123456       (Admin Dashboard)
-  operator / operator123  (Operator Dashboard)
+Ghi chú: analyzer hiện còn các warning/info cũ như `withOpacity` deprecated, `use_build_context_synchronously`, unused imports. Đây là vấn đề cleanup frontend, không phải lỗi deploy chính.
 
-Device ID Pi: dev-bbb742d369
-Artifact ID:  artifact_demo_001
-Pi → Server:  http://192.168.137.1:8000
-Phone → Server: http://192.168.0.102:8000
+### 12.6. Pose
+
+Kiểm tra pose health:
+
+```bash
+TOKEN="<access_token>"
+
+curl http://127.0.0.1:8000/pose/health \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Kiểm tra artifact đã có golden pose:
+
+```bash
+curl http://127.0.0.1:8000/pose/golden-pose/<artifact_id>/status \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## 13. Bảo Trì Thường Gặp
+
+### Thay model AI
+
+```bash
+cp /path/to/new-model.pt model/
+cd server
+docker compose --env-file .env.docker restart server
+```
+
+### Tạo/cập nhật admin
+
+```bash
+cd server
+docker compose --env-file .env.docker exec server \
+  python tools/create_admin.py --username admin --password 123456 --role admin
+```
+
+### Liệt kê user
+
+```bash
+cd server
+docker compose --env-file .env.docker exec server python tools/list_users.py
+```
+
+### Xóa ảnh stereo test cũ
+
+```bash
+rm -f server/data/uploads/pose_init/*.png
+```
+
+### Xóa golden pose của một artifact để khởi tạo lại
+
+```bash
+rm -rf server/data/uploads/golden_poses/<artifact_id>
+```
+
+Không xóa toàn bộ `server/data/uploads/artifacts/` nếu vẫn cần ảnh inspection/reference cũ.
+
+---
+
+## 14. Checklist Vận Hành
+
+Trước khi demo hoặc chạy kiểm tra thật:
+
+- Server Docker đang chạy.
+- `/health` trả `status=ok`.
+- `/mqtt/health` báo MQTT bridge connected.
+- File model `.pt` nằm trong `model/`.
+- Camera params lens `1.5` tồn tại.
+- Pi agent đang chạy và online.
+- App build đúng `API_BASE_URL`.
+- User đăng nhập đang active.
+- Artifact đã được tạo.
+- Marker ChArUco đúng chuẩn và nằm trong khung hình.
+- Baseline vật lý của slider đúng 10cm cho 80000 steps.
+- Device workflow dùng `device_code`, ví dụ `dev-bbb742d369`.
+
+---
+
+## 15. Tóm Tắt Nhanh
+
+```text
+Server:
+  cd server
+  docker compose --env-file .env.docker up -d
+
+Android USB:
+  ./scripts/wsl_adb_setup.sh
+  flutter build apk --release --dart-define=API_BASE_URL=http://127.0.0.1:8000
+
+Pi:
+  cd embed/device_agent
+  PYTHONPATH=. python3 runtime/main_app.py
+
+Admin mặc định dev:
+  admin / 123456
+
+Device hiện tại:
+  dev-bbb742d369
+
+Baseline stereo:
+  100mm cố định, 80000 steps, không chỉnh từ UI/API
 ```

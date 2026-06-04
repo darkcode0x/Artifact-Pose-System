@@ -139,7 +139,7 @@ def _wait_for_ack(
     require_ok: bool,
 ) -> dict[str, Any]:
     deadline = time.time() + max(1.0, timeout_sec)
-    ack_url = _url(base_url, f"/devices/{device_id}/acks?limit=200")
+    ack_url = _url(base_url, f"/api/v1/devices/{device_id}/acks?limit=200")
 
     while time.time() < deadline:
         acks_payload = _http_json("GET", ack_url, None, 8)
@@ -308,10 +308,10 @@ def main() -> int:
             )
         print(f"      Device: {device_id}")
 
-        print("[5/7] Sending move command via /devices/{device_id}/queue_move...")
+        print("[5/7] Sending move command via /api/v1/devices/{device_id}/queue_move...")
         queue_resp = _http_json(
             "POST",
-            _url(base_url, f"/devices/{device_id}/queue_move"),
+            _url(base_url, f"/api/v1/devices/{device_id}/queue_move"),
             _default_move_payload(),
             args.http_timeout_sec,
         )

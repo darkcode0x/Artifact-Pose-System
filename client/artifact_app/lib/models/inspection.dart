@@ -89,23 +89,44 @@ class Inspection {
 
   /// Parse YOLO detections from detectionsJson.
   /// Returns flat list of detection maps with class_name, confidence, bbox_xyxy.
+  /// Prefers enriched all_detections (has crop_path, crop_region_ssim) when available.
   List<Map<String, dynamic>> get detections {
     if (detectionsJson == null || detectionsJson!.isEmpty) return [];
     try {
-      final parsed = jsonDecode(detectionsJson!) as dynamic;
-      // New format: {"annotated_path": "...", "results": [...]}
-      final rawList = (parsed is Map ? parsed['results'] : parsed) as List<dynamic>? ?? [];
-      final all = <Map<String, dynamic>>[];
-      for (final item in rawList) {
-        final dets = (item as Map<String, dynamic>)['detections'] as List<dynamic>? ?? [];
-        for (final d in dets) {
-          all.add(Map<String, dynamic>.from(d as Map));
+      final parsed = jsonDecode(detectionsJson!);
+      if (parsed is Map) {
+        // Prefer enriched all_detections (has crop_path, crop_region_ssim)
+        final enriched = parsed['all_detections'];
+        if (enriched is List && enriched.isNotEmpty) {
+          return enriched.map((d) => Map<String, dynamic>.from(d as Map)).toList();
         }
+        // Fallback to raw results
+        final rawList = parsed['results'] as List<dynamic>? ?? [];
+        final all = <Map<String, dynamic>>[];
+        for (final item in rawList) {
+          final dets = (item as Map<String, dynamic>)['detections'] as List<dynamic>? ?? [];
+          for (final d in dets) {
+            all.add(Map<String, dynamic>.from(d as Map));
+          }
+        }
+        return all;
       }
-      return all;
-    } catch (_) {
-      return [];
-    }
+    } catch (_) {}
+    return [];
+  }
+
+  /// SSIM-based crop regions with per-region metadata.
+  /// Keys: index, crop_path, region_bbox, region_ssim, area_pct
+  List<Map<String, dynamic>> get cropRegions {
+    if (detectionsJson == null || detectionsJson!.isEmpty) return [];
+    try {
+      final parsed = jsonDecode(detectionsJson!);
+      if (parsed is Map) {
+        final crops = parsed['crops'] as List<dynamic>? ?? [];
+        return crops.map((c) => Map<String, dynamic>.from(c as Map)).toList();
+      }
+    } catch (_) {}
+    return [];
   }
 
   /// SSIM summary embedded in detections_json.

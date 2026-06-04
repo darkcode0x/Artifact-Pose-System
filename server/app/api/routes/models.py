@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
-from app.api.dependencies import get_container
+from app.api.dependencies import get_container, get_current_user, require_admin
+from app.models.user import User
 from app.schemas.models import (
     ModelDetectResponse,
     ModelInfo,
@@ -17,7 +18,10 @@ router = APIRouter()
 
 
 @router.get("/models", response_model=list[ModelInfo])
-def list_models(container: AppContainer = Depends(get_container)) -> list[ModelInfo]:
+def list_models(
+    container: AppContainer = Depends(get_container),
+    _: User = Depends(get_current_user),
+) -> list[ModelInfo]:
     models = container.model_service.list_models()
     return [
         ModelInfo(
@@ -35,6 +39,7 @@ def list_models(container: AppContainer = Depends(get_container)) -> list[ModelI
 def load_model(
     req: ModelLoadRequest,
     container: AppContainer = Depends(get_container),
+    _: User = Depends(require_admin),
 ) -> ModelLoadResponse:
     try:
         loaded = container.model_service.load_model(
@@ -62,6 +67,7 @@ def load_model(
 def unload_model(
     name: str,
     container: AppContainer = Depends(get_container),
+    _: User = Depends(require_admin),
 ) -> dict[str, bool]:
     removed = container.model_service.unload_model(name)
     return {"ok": removed}
@@ -72,6 +78,7 @@ def predict(
     name: str,
     req: ModelPredictRequest,
     container: AppContainer = Depends(get_container),
+    _: User = Depends(get_current_user),
 ) -> ModelPredictResponse:
     try:
         output = container.model_service.predict(name, req.input_data)
@@ -92,6 +99,7 @@ async def detect_image(
     name: str,
     file: UploadFile = File(...),
     container: AppContainer = Depends(get_container),
+    _: User = Depends(get_current_user),
 ) -> ModelDetectResponse:
     image_bytes = await file.read()
     if not image_bytes:

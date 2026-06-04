@@ -11,7 +11,6 @@ const _clsLabel = {
   'material_loss': 'Material Loss',
   'peel': 'Peeling',
   'scratch': 'Scratch',
-  'fold': 'Fold / Deformation',
   'writing_marks': 'Writing Marks',
   'dirt': 'Dirt',
   'staning': 'Staining',
@@ -433,13 +432,13 @@ class _DetectTab extends StatelessWidget {
           emptyLabel: 'No aligned image available. Initialize Golden Pose first.',
         ),
         const SizedBox(height: 20),
-        _buildDetectionList(detections),
+        _buildDetectionList(context, detections),
         const SizedBox(height: 24),
       ],
     );
   }
 
-  Widget _buildDetectionList(List<Map<String, dynamic>> detections) {
+  Widget _buildDetectionList(BuildContext context, List<Map<String, dynamic>> detections) {
     if (detections.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(16),
@@ -475,11 +474,11 @@ class _DetectTab extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         ...detections.map((detection) {
-          final rawName = detection['class_name']?.toString() ?? '';
-          final name = _clsLabel[rawName] ?? rawName;
+          final rawName   = detection['class_name']?.toString() ?? '';
+          final name      = _clsLabel[rawName] ?? rawName;
           final confidence =
               ((detection['confidence'] as num?)?.toDouble() ?? 0.0) * 100;
-          final regionSimilarity =
+          final regionSsim =
               (detection['region_ssim'] as num?)?.toDouble();
           final confColor = confidence >= 65
               ? AppColors.statusDamaged
@@ -490,7 +489,7 @@ class _DetectTab extends StatelessWidget {
           return Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: confColor.withOpacity(0.07),
                 borderRadius: BorderRadius.circular(10),
@@ -508,9 +507,9 @@ class _DetectTab extends StatelessWidget {
                           name.isNotEmpty ? name : 'Unknown',
                           style: const TextStyle(fontWeight: FontWeight.w500),
                         ),
-                        if (regionSimilarity != null)
+                        if (regionSsim != null)
                           Text(
-                            'Region Similarity: ${(regionSimilarity * 100).toStringAsFixed(1)}%',
+                            'Region Similarity: ${(regionSsim * 100).toStringAsFixed(1)}%',
                             style: const TextStyle(
                               fontSize: 11,
                               color: AppColors.textMuted,

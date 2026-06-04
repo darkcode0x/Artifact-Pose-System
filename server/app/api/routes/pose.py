@@ -8,9 +8,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_container
+from app.api.dependencies import get_container, get_current_user, get_optional_current_user
 from app.core.database import get_db
 from app.models.artifact import Artifact, Image, ImageType
+from app.models.user import User
 from app.schemas.pose import (
     GoldenPoseStatusResponse,
     PoseCorrectionResponse,
@@ -32,8 +33,21 @@ async def _save_temp_upload(folder: Path, file: UploadFile) -> Path:
     return target
 
 
+def _is_registered_device(container: AppContainer, device_code: str | None) -> bool:
+    if not device_code:
+        return False
+    normalized = device_code.strip()
+    return any(
+        item.get("device_id") == normalized
+        for item in container.device_registry.list_all()
+    )
+
+
 @router.get("/pose/health", response_model=PoseHealthResponse)
-def pose_health(container: AppContainer = Depends(get_container)) -> PoseHealthResponse:
+def pose_health(
+    container: AppContainer = Depends(get_container),
+    _=Depends(get_current_user),
+) -> PoseHealthResponse:
     return PoseHealthResponse(**container.pose_service.health())
 
 
@@ -41,6 +55,7 @@ def pose_health(container: AppContainer = Depends(get_container)) -> PoseHealthR
 async def pose_correct(
     file: UploadFile = File(...),
     container: AppContainer = Depends(get_container),
+    _=Depends(get_current_user),
 ) -> PoseCorrectionResponse:
     temp_dir = container.settings.uploads_dir / "pose"
     image_path = await _save_temp_upload(temp_dir, file)
@@ -58,9 +73,19 @@ async def initialize_golden(
     left_file: UploadFile = File(...),
     right_file: UploadFile = File(...),
     artifact_id: str | None = Form(None),
+    device_id: str | None = Form(None),
+    device_code: str | None = Form(None),
     container: AppContainer = Depends(get_container),
     db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_current_user),
 ) -> PoseInitializeResponse:
+    upload_device_code = (device_code or device_id or "").strip()
+    if current_user is None and not _is_registered_device(container, upload_device_code):
+        raise HTTPException(
+            status_code=403,
+            detail="Authenticated user or registered device is required",
+        )
+
     temp_dir = container.settings.uploads_dir / "pose_init"
     left_path = await _save_temp_upload(temp_dir, left_file)
     right_path = await _save_temp_upload(temp_dir, right_file)
@@ -119,6 +144,7 @@ async def initialize_golden(
 def golden_pose_status(
     artifact_id: str,
     container: AppContainer = Depends(get_container),
+    _=Depends(get_current_user),
 ) -> GoldenPoseStatusResponse:
     """Kiem tra artifact da co golden pose chua (per-artifact)."""
     has_it = container.pose_service.has_golden_pose(artifact_id)

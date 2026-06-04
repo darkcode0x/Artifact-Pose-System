@@ -210,6 +210,21 @@ class InspectionService:
         new_p = priority.get(new_status, 0)
         return new_status if new_p > cur_p else current
 
+    # ── Pipeline tuning — edit here to adjust behaviour ──────────────────────
+    _YOLO_CONF        = 0.15   # detection confidence threshold
+    _YOLO_SUB_BATCH   = 4      # crops per model.predict() call (OOM guard)
+    _MIN_AREA_FACTOR  = 0.0001 # contour area filter: max(500, h*w*factor) px²
+    _DAMAGE_PCT_GATE  = 0.5    # skip crop-YOLO if damage_pct < this %
+    _OTSU_FALLBACK    = 60     # hard threshold when Otsu < 30
+    _CONTOUR_CAP      = 50     # max contours to inspect
+    _TIGHT_PAD_FACTOR = 0.30   # tight crop: padding as fraction of contour side
+    _TIGHT_MIN_PAD    = 40     # tight crop: minimum padding in px
+    _WIDE_PAD_FACTOR  = 0.70   # wide crop: padding as fraction of contour side
+    _WIDE_MIN_PAD     = 120    # wide crop: minimum padding in px
+    _NMS_IOU_THRESH   = 0.45   # NMS IoU threshold (tight vs wide de-dup)
+    _EARLY_EXIT_CONF  = 0.40   # skip wide crop if tight already >= this conf
+    # ─────────────────────────────────────────────────────────────────────────
+
     def _analyze_against_reference(self, *, current_path: Path, reference_path: Path | None, artifact_id: str, ts_ms: int) -> dict[str, Any]:
         result: dict[str, Any] = {
             "ssim": None,
@@ -233,8 +248,11 @@ class InspectionService:
             result["auto_description"] = f"Image load error: {load_exc}"
             return result
 
-        # ── SIFT alignment + full SSIM analysis (requires reference image) ──
+        all_dets: list[dict] = []
         aligned_img: Any = None
+        aligned_url: str | None = None
+        annotated = current_img.copy()
+
         if reference_path is not None and reference_path.exists():
             try:
                 import numpy as np
@@ -242,180 +260,317 @@ class InspectionService:
                 reference_img = cv2.imread(str(reference_path))
                 if reference_img is not None:
                     h, w = reference_img.shape[:2]
-                    cur_resized = cv2.resize(current_img, (w, h)) if current_img.shape[:2] != (h, w) else current_img.copy()
+                    cur_resized = (
+                        cv2.resize(current_img, (w, h))
+                        if current_img.shape[:2] != (h, w)
+                        else current_img.copy()
+                    )
 
-                    # SIFT alignment with valid mask
+                    # SIFT: used only for diff map.  YOLO runs on yolo_source (no warp artifacts).
                     aligned_img, valid_mask, _ = self._sift_align_with_mask(cur_resized, reference_img)
+                    ssim_source = aligned_img if aligned_img is not None else cur_resized
+                    yolo_source = cur_resized
 
-                    # Use aligned result as source for SSIM
-                    source = aligned_img if aligned_img is not None else cur_resized
-
-                    # ── Multi-channel SSIM (from analyze_damage.py) ─────────
-                    gray_src = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
+                    # ── Multi-channel SSIM (gray 60% + color 40%) ──────────────────
+                    gray_src = cv2.cvtColor(ssim_source, cv2.COLOR_BGR2GRAY)
                     gray_ref = cv2.cvtColor(reference_img, cv2.COLOR_BGR2GRAY)
-
-                    score_gray, diff_gray = structural_similarity(gray_ref, gray_src, full=True, win_size=7)
-
-                    score_channels = []
+                    score_gray, diff_gray = structural_similarity(
+                        gray_ref, gray_src, full=True, win_size=7
+                    )
+                    score_channels: list[float] = []
                     diff_color = np.zeros_like(gray_src, dtype=np.float64)
                     for c in range(3):
                         sc, dc = structural_similarity(
-                            reference_img[:, :, c], source[:, :, c], full=True, win_size=7
+                            reference_img[:, :, c], ssim_source[:, :, c], full=True, win_size=7
                         )
                         score_channels.append(sc)
                         diff_color += (1.0 - dc)
                     diff_color /= 3.0
-                    score_color = float(np.mean(score_channels))
-
-                    # Combined diff map: max of grayscale and color differences
+                    score_color  = float(np.mean(score_channels))
                     diff_combined = np.maximum(1.0 - diff_gray, diff_color)
-                    diff_uint8 = (diff_combined * 255).astype(np.uint8)
-
-                    # Weighted SSIM: grayscale 60% + color 40%
-                    ssim_score = 0.6 * float(score_gray) + 0.4 * score_color
-                    result["ssim"] = ssim_score
-                    result["ssim_gray"] = float(score_gray)
+                    diff_uint8    = (diff_combined * 255).astype(np.uint8)
+                    ssim_score    = 0.6 * float(score_gray) + 0.4 * score_color
+                    result["ssim"]       = ssim_score
+                    result["ssim_gray"]  = float(score_gray)
                     result["ssim_color"] = score_color
 
-                    # Apply valid mask (SIFT warp boundary)
                     if valid_mask is not None:
                         diff_uint8 = cv2.bitwise_and(diff_uint8, valid_mask)
 
-                    # ── Heatmap (JET colormap overlay) ─────────────────────
+                    # ── Heatmap ────────────────────────────────────────────────────
                     heatmap = cv2.applyColorMap(diff_uint8, cv2.COLORMAP_JET)
                     if valid_mask is not None:
                         heatmap[cv2.bitwise_not(valid_mask) > 0] = [128, 128, 128]
-                    heatmap_overlay = cv2.addWeighted(source, 0.6, heatmap, 0.4, 0)
+                    heatmap_overlay = cv2.addWeighted(ssim_source, 0.6, heatmap, 0.4, 0)
 
-                    # ── Damage mask: Otsu adaptive threshold ───────────────
+                    # ── Damage mask → contours ─────────────────────────────────────
                     blurred = cv2.GaussianBlur(diff_uint8, (5, 5), 0)
                     otsu_thresh, damage_mask = cv2.threshold(
                         blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
                     )
                     if otsu_thresh < 30:
-                        _, damage_mask = cv2.threshold(blurred, 60, 255, cv2.THRESH_BINARY)
-
-                    kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-                    kernel_big  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-                    damage_mask = cv2.morphologyEx(damage_mask, cv2.MORPH_OPEN,  kernel_small, iterations=2)
-                    damage_mask = cv2.morphologyEx(damage_mask, cv2.MORPH_CLOSE, kernel_big,   iterations=2)
-
-                    # Contours + damage %
-                    contours, _ = cv2.findContours(damage_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    min_area = max(500, (h * w) * 0.0005)
-                    big_contours = [c for c in contours if cv2.contourArea(c) > min_area]
+                        _, damage_mask = cv2.threshold(
+                            blurred, self._OTSU_FALLBACK, 255, cv2.THRESH_BINARY
+                        )
+                    kernel_s = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                    kernel_b = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+                    damage_mask = cv2.morphologyEx(damage_mask, cv2.MORPH_OPEN,  kernel_s, iterations=2)
+                    damage_mask = cv2.morphologyEx(damage_mask, cv2.MORPH_CLOSE, kernel_b, iterations=2)
+                    contours, _ = cv2.findContours(
+                        damage_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                    )
+                    min_area = max(500, (h * w) * self._MIN_AREA_FACTOR)
+                    big_contours = sorted(
+                        [c for c in contours if cv2.contourArea(c) > min_area],
+                        key=cv2.contourArea, reverse=True,
+                    )[: self._CONTOUR_CAP]
                     cv2.drawContours(heatmap_overlay, big_contours, -1, (0, 0, 255), 2)
 
-                    valid_area = int(cv2.countNonZero(valid_mask)) if valid_mask is not None else (h * w)
+                    valid_area  = int(cv2.countNonZero(valid_mask)) if valid_mask is not None else (h * w)
                     damage_area = sum(cv2.contourArea(c) for c in big_contours)
-                    damage_pct = (damage_area / max(valid_area, 1)) * 100.0
+                    damage_pct  = (damage_area / max(valid_area, 1)) * 100.0
                     result["damage_pct"] = round(damage_pct, 2)
 
-                    # Save heatmap
-                    heatmap_filename = f"heatmap_{artifact_id}_{ts_ms}.jpg"
-                    heatmap_dir = self._artifact_uploads_dir / artifact_id
-                    heatmap_dir.mkdir(parents=True, exist_ok=True)
-                    heatmap_full_path = heatmap_dir / heatmap_filename
-                    cv2.imwrite(str(heatmap_full_path), heatmap_overlay)
-                    result["heatmap_path"] = str(heatmap_full_path)
+                    # ── Save heatmap ───────────────────────────────────────────────
+                    _out_dir = self._artifact_uploads_dir / artifact_id
+                    _out_dir.mkdir(parents=True, exist_ok=True)
+                    heatmap_fname = f"heatmap_{artifact_id}_{ts_ms}.jpg"
+                    cv2.imwrite(str(_out_dir / heatmap_fname), heatmap_overlay)
+                    result["heatmap_path"] = str(_out_dir / heatmap_fname)
 
-                    # Save SIFT-aligned image
+                    # ── Save aligned image ─────────────────────────────────────────
                     if aligned_img is not None:
-                        detect_dir = self._artifact_uploads_dir / artifact_id
-                        detect_dir.mkdir(parents=True, exist_ok=True)
-                        aligned_filename = f"aligned_{artifact_id}_{ts_ms}.jpg"
-                        cv2.imwrite(str(detect_dir / aligned_filename), aligned_img)
-                        result["aligned_image_path"] = f"/uploads/artifacts/{artifact_id}/{aligned_filename}"
+                        aligned_fname = f"aligned_{artifact_id}_{ts_ms}.jpg"
+                        cv2.imwrite(str(_out_dir / aligned_fname), aligned_img)
+                        aligned_url = f"/uploads/artifacts/{artifact_id}/{aligned_fname}"
+                        result["aligned_image_path"] = aligned_url
 
-            except Exception as align_exc:
-                logger.error(f"[analyze] SSIM/alignment error: {align_exc}")
+                    # ── YOLO: hybrid pipeline on yolo_source ───────────────────────
+                    annotated = yolo_source.copy()
+
+                    def _pad_crop(bx: int, by: int, bw: int, bh: int,
+                                  pad_factor: float, min_pad: int) -> tuple[int, int, int, int]:
+                        _side = max(bw, bh)
+                        _pad  = max(min_pad, int(_side * pad_factor))
+                        _half = (_side // 2) + _pad
+                        _cx, _cy = bx + bw // 2, by + bh // 2
+                        return (
+                            max(0, _cx - _half), max(0, _cy - _half),
+                            min(w, _cx + _half), min(h, _cy + _half),
+                        )
+
+                    if damage_pct < self._DAMAGE_PCT_GATE or not big_contours:
+                        # Fallback: full-image YOLO when damage level is very low
+                        _yolo_raw = self._model_service.detect_image(
+                            self._settings.default_ai_model_name,
+                            cv2.imencode(".jpg", yolo_source)[1].tobytes(),
+                        )
+                        for _res in (_yolo_raw or []):
+                            for _det in _res.get("detections", []):
+                                _conf = float(_det.get("confidence", 0))
+                                _name = str(_det.get("class_name", "unknown"))
+                                x1, y1, x2, y2 = [int(v) for v in _det["bbox_xyxy"]]
+                                _r_ssim = self._compute_region_ssim(
+                                    ssim_source, reference_img, x1, y1, x2, y2, padding=0
+                                )
+                                all_dets.append({
+                                    "class_name":  _name,
+                                    "confidence":  round(_conf, 4),
+                                    "bbox_xyxy":   [x1, y1, x2, y2],
+                                    "from_crop":   "full",
+                                    "region_ssim": round(float(_r_ssim), 4),
+                                })
+                    else:
+                        # Phase A: tight crops batch
+                        tight_crop_list: list = []
+                        for _c in big_contours:
+                            bx, by, bw, bh = cv2.boundingRect(_c)
+                            x1c, y1c, x2c, y2c = _pad_crop(
+                                bx, by, bw, bh, self._TIGHT_PAD_FACTOR, self._TIGHT_MIN_PAD
+                            )
+                            if x2c - x1c < 40 or y2c - y1c < 40:
+                                continue
+                            _r_ssim = self._compute_region_ssim(
+                                ssim_source, reference_img, bx, by, bx + bw, by + bh, padding=0
+                            )
+                            tight_crop_list.append(
+                                (yolo_source[y1c:y2c, x1c:x2c], x1c, y1c, "tight", float(_r_ssim))
+                            )
+
+                        tight_dets = (
+                            self._model_service.detect_crops_batch(
+                                self._settings.default_ai_model_name,
+                                tight_crop_list,
+                                conf=self._YOLO_CONF,
+                                sub_batch=self._YOLO_SUB_BATCH,
+                            ) if tight_crop_list else []
+                        )
+
+                        # Phase B: wide crops for contours without high-conf tight det
+                        wide_crop_list: list = []
+                        for _c in big_contours:
+                            bx, by, bw, bh = cv2.boundingRect(_c)
+                            _cx_c = bx + bw / 2
+                            _cy_c = by + bh / 2
+                            max_conf = max(
+                                (
+                                    d["confidence"]
+                                    for d in tight_dets
+                                    if abs((d["bbox_xyxy"][0] + d["bbox_xyxy"][2]) / 2 - _cx_c)
+                                    < bw + self._TIGHT_MIN_PAD
+                                    and abs((d["bbox_xyxy"][1] + d["bbox_xyxy"][3]) / 2 - _cy_c)
+                                    < bh + self._TIGHT_MIN_PAD
+                                ),
+                                default=0.0,
+                            )
+                            if max_conf >= self._EARLY_EXIT_CONF:
+                                continue
+                            x1c, y1c, x2c, y2c = _pad_crop(
+                                bx, by, bw, bh, self._WIDE_PAD_FACTOR, self._WIDE_MIN_PAD
+                            )
+                            if x2c - x1c < 40 or y2c - y1c < 40:
+                                continue
+                            _r_ssim = self._compute_region_ssim(
+                                ssim_source, reference_img, bx, by, bx + bw, by + bh, padding=0
+                            )
+                            wide_crop_list.append(
+                                (yolo_source[y1c:y2c, x1c:x2c], x1c, y1c, "wide", float(_r_ssim))
+                            )
+
+                        wide_dets = (
+                            self._model_service.detect_crops_batch(
+                                self._settings.default_ai_model_name,
+                                wide_crop_list,
+                                conf=self._YOLO_CONF,
+                                sub_batch=self._YOLO_SUB_BATCH,
+                            ) if wide_crop_list else []
+                        )
+
+                        # NMS across tight + wide
+                        combined = self._nms_detections(tight_dets + wide_dets, self._NMS_IOU_THRESH)
+                        for det in combined:
+                            all_dets.append({
+                                "class_name":  det["class_name"],
+                                "confidence":  det["confidence"],
+                                "bbox_xyxy":   det["bbox_xyxy"],
+                                "from_crop":   det.get("from_crop", ""),
+                                "region_ssim": det.get("region_ssim", 0.0),
+                            })
+
+            except Exception as exc:
+                logger.error(f"[analyze] pipeline error: {exc}", exc_info=True)
         else:
             result["auto_description"] = "No reference image — AI detection only."
+            try:
+                _yolo_raw = self._model_service.detect_image(
+                    self._settings.default_ai_model_name,
+                    current_path.read_bytes(),
+                )
+                for _res in (_yolo_raw or []):
+                    for _det in _res.get("detections", []):
+                        x1, y1, x2, y2 = [int(v) for v in _det["bbox_xyxy"]]
+                        all_dets.append({
+                            "class_name":  str(_det.get("class_name", "unknown")),
+                            "confidence":  round(float(_det.get("confidence", 0)), 4),
+                            "bbox_xyxy":   [x1, y1, x2, y2],
+                            "from_crop":   "full",
+                            "region_ssim": None,
+                        })
+            except Exception as exc:
+                logger.warning(f"[analyze] YOLO error (no reference): {exc}")
 
-        # ── YOLO detection + annotated image ─────────────────────────────────
+        # ── Annotate bboxes on annotated image (no crop outlines) ─────────────
         try:
-            yolo_result = self._model_service.detect_image(
-                self._settings.default_ai_model_name,
-                current_path.read_bytes(),
-            )
-
             _SEVERITY_COLOR = {
                 "HIGH":   (0,   0,   255),
                 "MEDIUM": (0,   128, 255),
                 "LOW":    (0,   200, 128),
             }
-            annotated = current_img.copy()
-            all_dets: list[dict] = []
-            for res_item in (yolo_result or []):
-                for det in res_item.get("detections", []):
-                    all_dets.append(det)
-                    x1, y1, x2, y2 = [int(v) for v in det["bbox_xyxy"]]
-                    name = str(det.get("class_name", "unknown"))
-                    conf = float(det.get("confidence", 0))
-                    if conf >= 0.65:
-                        severity = "HIGH"
-                    elif conf >= 0.40:
-                        severity = "MEDIUM"
-                    else:
-                        severity = "LOW"
-                    color = _SEVERITY_COLOR[severity]
-                    # Per-region SSIM enriches label when reference is available
-                    region_ssim_val: float | None = None
-                    if result.get("ssim") is not None:
-                        try:
-                            import numpy as np
-                            reference_img_for_region = cv2.imread(str(reference_path))
-                            src_for_region = aligned_img if aligned_img is not None else current_img
-                            if reference_img_for_region is not None:
-                                region_ssim_val = self._compute_region_ssim(
-                                    src_for_region, reference_img_for_region, x1, y1, x2, y2
-                                )
-                        except Exception:
-                            pass
-                    label = f"{name} {conf*100:.0f}%"
-                    if region_ssim_val is not None:
-                        label += f" (SSIM {region_ssim_val*100:.0f}%)"
-                    thickness = 3 if severity == "HIGH" else 2
-                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
-                    font_scale = 0.50
-                    (tw, th), bl = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
-                    y_top = max(0, y1 - th - bl - 4)
-                    cv2.rectangle(annotated, (x1, y_top), (x1 + tw + 4, y1), color, -1)
-                    cv2.putText(annotated, label, (x1 + 2, y1 - bl - 2),
-                                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), 1, cv2.LINE_AA)
+            for det in all_dets:
+                x1, y1, x2, y2 = [int(v) for v in det["bbox_xyxy"]]
+                _conf = float(det.get("confidence", 0))
+                _name = str(det.get("class_name", "unknown"))
+                _r_ssim_val = det.get("region_ssim")
+                _severity = "HIGH" if _conf >= 0.65 else "MEDIUM" if _conf >= 0.40 else "LOW"
+                _color = _SEVERITY_COLOR[_severity]
+                _label = f"{_name} {_conf * 100:.0f}%"
+                if _r_ssim_val is not None:
+                    _label += f" (SSIM {float(_r_ssim_val) * 100:.0f}%)"
+                _thickness = 3 if _severity == "HIGH" else 2
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), _color, _thickness)
+                _fs = 0.50
+                (_tw, _th), _bl = cv2.getTextSize(_label, cv2.FONT_HERSHEY_SIMPLEX, _fs, 1)
+                _yt = max(0, y1 - _th - _bl - 4)
+                cv2.rectangle(annotated, (x1, _yt), (x1 + _tw + 4, y1), _color, -1)
+                cv2.putText(
+                    annotated, _label, (x1 + 2, y1 - _bl - 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, _fs, (255, 255, 255), 1, cv2.LINE_AA,
+                )
+        except Exception as draw_exc:
+            logger.warning(f"[analyze] annotation error: {draw_exc}")
 
-            detect_dir = self._artifact_uploads_dir / artifact_id
-            detect_dir.mkdir(parents=True, exist_ok=True)
-            detect_filename = f"detect_{artifact_id}_{ts_ms}.jpg"
-            cv2.imwrite(str(detect_dir / detect_filename), annotated)
-            annotated_url = f"/uploads/artifacts/{artifact_id}/{detect_filename}"
+        # ── Save annotated image ───────────────────────────────────────────────
+        annotated_url: str | None = None
+        try:
+            _out_dir = self._artifact_uploads_dir / artifact_id
+            _out_dir.mkdir(parents=True, exist_ok=True)
+            detect_fname = f"detect_{artifact_id}_{ts_ms}.jpg"
+            cv2.imwrite(str(_out_dir / detect_fname), annotated)
+            annotated_url = f"/uploads/artifacts/{artifact_id}/{detect_fname}"
+        except Exception as save_exc:
+            logger.warning(f"[analyze] save detect image error: {save_exc}")
 
-            result["all_detections"] = all_dets
-            result["detections_json"] = json.dumps({
-                "annotated_path": annotated_url,
-                "aligned_path": result.get("aligned_image_path"),
-                "results": yolo_result,
-                "ssim_summary": {
-                    "ssim": result.get("ssim"),
-                    "ssim_gray": result.get("ssim_gray"),
-                    "ssim_color": result.get("ssim_color"),
-                    "damage_pct": result.get("damage_pct"),
-                } if result.get("ssim") is not None else None,
-            })
+        result["all_detections"] = all_dets
+        result["detections_json"] = json.dumps({
+            "annotated_path": annotated_url,
+            "aligned_path":   aligned_url,
+            "all_detections": all_dets,
+            "ssim_summary": {
+                "ssim":       result.get("ssim"),
+                "ssim_gray":  result.get("ssim_gray"),
+                "ssim_color": result.get("ssim_color"),
+                "damage_pct": result.get("damage_pct"),
+            } if result.get("ssim") is not None else None,
+        })
 
-            det_count = len(all_dets)
-            ssim_str = f" | SSIM {result['ssim']*100:.1f}%" if result.get("ssim") is not None else ""
-            result["auto_description"] = (
-                f"{det_count} region(s) detected{ssim_str}." if det_count
-                else f"No damage detected{ssim_str}."
-            )
-
-            logger.info("[analyze] %d detection(s), SSIM=%.4f for artifact=%s",
-                        det_count, result.get("ssim") or 0.0, artifact_id)
-        except Exception as yolo_exc:
-            logger.warning(f"[analyze] YOLO detection skipped: {yolo_exc}")
-
+        det_count = len(all_dets)
+        ssim_str = f" | SSIM {result['ssim'] * 100:.1f}%" if result.get("ssim") is not None else ""
+        result["auto_description"] = (
+            f"{det_count} region(s) detected{ssim_str}." if det_count
+            else f"No damage detected{ssim_str}."
+        )
+        logger.info("[analyze] %d detection(s), SSIM=%.4f for artifact=%s",
+                    det_count, result.get("ssim") or 0.0, artifact_id)
         return result
+
+    @staticmethod
+    def _nms_detections(dets: list[dict], iou_threshold: float = 0.45) -> list[dict]:
+        """Non-maximum suppression across all detections (class-agnostic)."""
+        if not dets:
+            return []
+        dets_sorted = sorted(dets, key=lambda d: d.get("confidence", 0), reverse=True)
+        keep: list[dict] = []
+        suppressed: set[int] = set()
+        for i, d in enumerate(dets_sorted):
+            if i in suppressed:
+                continue
+            keep.append(d)
+            ax1, ay1, ax2, ay2 = d["bbox_xyxy"]
+            area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+            for j, e in enumerate(dets_sorted):
+                if j <= i or j in suppressed:
+                    continue
+                bx1, by1, bx2, by2 = e["bbox_xyxy"]
+                ix1 = max(ax1, bx1); iy1 = max(ay1, by1)
+                ix2 = min(ax2, bx2); iy2 = min(ay2, by2)
+                inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+                if inter == 0:
+                    continue
+                area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+                iou = inter / max(area_a + area_b - inter, 1)
+                if iou > iou_threshold:
+                    suppressed.add(j)
+        return keep
 
     @staticmethod
     def _sift_align_with_mask(img: Any, reference: Any) -> tuple[Any, Any, int]:

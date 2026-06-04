@@ -5,11 +5,15 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import get_current_user
 from app.core.database import get_db
 from app.models.artifact import Artifact, Schedule
 from app.schemas.schedule import ScheduleCreate, ScheduleRead, ScheduleUpdate
 
-router = APIRouter(prefix="/api/v1/schedules")
+router = APIRouter(
+    prefix="/api/v1/schedules",
+    dependencies=[Depends(get_current_user)],
+)
 
 
 def _serialize(schedule: Schedule) -> ScheduleRead:
@@ -69,7 +73,7 @@ def create_schedule(
 
 @router.patch("/{schedule_id}", response_model=ScheduleRead)
 def update_schedule(
-    schedule_id: int,
+    schedule_id: str,
     payload: ScheduleUpdate,
     db: Session = Depends(get_db),
 ) -> ScheduleRead:
@@ -87,7 +91,7 @@ def update_schedule(
 
 
 @router.delete("/{schedule_id}", status_code=204)
-def delete_schedule(schedule_id: int, db: Session = Depends(get_db)) -> None:
+def delete_schedule(schedule_id: str, db: Session = Depends(get_db)) -> None:
     schedule = db.query(Schedule).filter(Schedule.id == schedule_id).first()
     if schedule is None:
         raise HTTPException(status_code=404, detail="Schedule not found")

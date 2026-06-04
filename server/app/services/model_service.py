@@ -131,6 +131,52 @@ class UltralyticsYoloRuntimeModel(BaseRuntimeModel):
             output.append({"detections": detections})
         return output
 
+    def predict_crops_batch(
+        self,
+        crop_list: list,  # [(crop_arr_np, ox, oy, spec_label, r_ssim), ...]
+        conf: float = 0.15,
+        sub_batch: int = 4,
+    ) -> list[dict]:
+        """Run YOLO on crop list in sub-batches. Returns dets projected to full-image coords."""
+        import cv2
+        import numpy as np
+
+        if not crop_list:
+            return []
+
+        imgs = []
+        for crop_arr, _ox, _oy, _spec, _ssim in crop_list:
+            _, enc = cv2.imencode(".jpg", crop_arr)
+            buf = np.frombuffer(enc.tobytes(), dtype=np.uint8)
+            imgs.append(cv2.imdecode(buf, cv2.IMREAD_COLOR))
+
+        results_list = []
+        for i in range(0, len(imgs), sub_batch):
+            chunk = imgs[i : i + sub_batch]
+            results_list.extend(
+                self._model.predict(chunk, imgsz=self._imgsz, conf=conf, iou=0.5, verbose=False)
+            )
+
+        all_dets: list[dict] = []
+        for res, (_, ox, oy, spec_label, r_ssim) in zip(results_list, crop_list):
+            boxes = getattr(res, "boxes", None)
+            if boxes is None or boxes.xyxy is None or len(boxes) == 0:
+                continue
+            xyxy_list = boxes.xyxy.cpu().numpy().tolist()
+            conf_list = boxes.conf.cpu().numpy().tolist()
+            cls_list  = boxes.cls.cpu().numpy().astype(int).tolist()
+            names = dict(res.names) if hasattr(res, "names") else {}
+            for i in range(len(xyxy_list)):
+                x1, y1, x2, y2 = [int(v) for v in xyxy_list[i]]
+                all_dets.append({
+                    "bbox_xyxy":   [ox + x1, oy + y1, ox + x2, oy + y2],
+                    "confidence":  round(float(conf_list[i]), 4),
+                    "class_name":  names.get(cls_list[i], str(cls_list[i])),
+                    "from_crop":   spec_label,
+                    "region_ssim": round(float(r_ssim), 4),
+                })
+        return all_dets
+
 
 class TorchScriptRuntimeModel(BaseRuntimeModel):
     def __init__(self, model_path: Path) -> None:
@@ -241,6 +287,28 @@ class ModelService:
 
         result = loaded.runtime_model.predict(image_bytes)
         return _to_jsonable(result)
+
+    def detect_crops_batch(
+        self,
+        name: str,
+        crop_list: list,
+        conf: float = 0.15,
+        sub_batch: int = 4,
+    ) -> list[dict]:
+        """Batch-predict on a list of (crop_arr, ox, oy, spec_label, r_ssim) tuples.
+        Returns dets with bbox projected to full-image coords."""
+        with self._lock:
+            loaded = self._models.get(name)
+
+        if loaded is None:
+            raise KeyError(f"Model '{name}' is not loaded")
+
+        if not isinstance(loaded.runtime_model, UltralyticsYoloRuntimeModel):
+            raise ValueError(
+                f"Model '{name}' does not support batch crop detection"
+            )
+
+        return loaded.runtime_model.predict_crops_batch(crop_list, conf=conf, sub_batch=sub_batch)
 
     @staticmethod
     def _detect_backend(model_path: Path | None) -> str:

@@ -30,12 +30,10 @@ class WorkflowService {
   Future<Map<String, dynamic>> startInitialization({
     required String deviceId,
     required String artifactId,
-    double baselineMm = 100.0,
   }) async {
     return _api.startInitialization(
       deviceId: deviceId,
       artifactId: artifactId,
-      baselineMm: baselineMm,
     );
   }
 
@@ -93,4 +91,3 @@ class WorkflowService {
     return false;
   }
 }
-
