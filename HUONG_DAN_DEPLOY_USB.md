@@ -252,7 +252,9 @@ powershell -ExecutionPolicy Bypass -File scripts\attach_android_usb.ps1
 ```
 
 Script sẽ:
-
+usbipd list
+usbipd bind --busid 2-3
+usbipd attach --wsl --busid 2-3
 - tìm Android device bằng `usbipd`;
 - bind/attach USB vào WSL;
 - chạy `adb reverse tcp:8000 tcp:8000`.
