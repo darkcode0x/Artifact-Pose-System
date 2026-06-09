@@ -673,11 +673,20 @@ class MainApp:
         if alignment_phase == "translation":
             # ── Pha 1: CHỈ stepper X/Z ─────────────────────────────────────
             # Servo KHÔNG được gọi — giữ nguyên góc hiện tại.
+            # X và Z chạy ĐỒNG THỜI trong 2 thread riêng.
             print(f"[MOVE]  [TRANSLATION ONLY] Servo giu nguyen: Yaw={self.hardware.current_yaw}° Pitch={self.hardware.current_pitch}°")
-            if x_steps > 0:
-                self._move_slider_x_with_profile(x_steps, 1 if x_dir >= 0 else -1)
-            if z_steps > 0:
-                self._move_slider_z_with_profile(z_steps, 1 if z_dir >= 0 else -1)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = []
+                if x_steps > 0:
+                    futures.append(executor.submit(
+                        self._move_slider_x_with_profile, x_steps, 1 if x_dir >= 0 else -1
+                    ))
+                if z_steps > 0:
+                    futures.append(executor.submit(
+                        self._move_slider_z_with_profile, z_steps, 1 if z_dir >= 0 else -1
+                    ))
+                for f in futures:
+                    f.result()
 
         elif alignment_phase == "rotation":
             # ── Pha 2: CHỈ servo Pan/Tilt ──────────────────────────────────
