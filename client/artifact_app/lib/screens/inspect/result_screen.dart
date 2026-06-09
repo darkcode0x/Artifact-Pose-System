@@ -4,7 +4,6 @@ import 'package:intl/intl.dart';
 import '../../models/inspection.dart';
 import '../../services/api_config.dart';
 import '../../theme.dart';
-import '../../widgets/responsive_scaffold.dart';
 import '../../widgets/status_badge.dart';
 
 const _clsLabel = {
@@ -327,7 +326,13 @@ class _VisualReviewTab extends StatelessWidget {
   }
 
   Widget _buildImageComparison(BuildContext context) {
-    final originalUrl = ApiConfig.resolveAssetUrl(inspection.currentImagePath);
+    final referencePath = inspection.previousImagePath;
+    final hasReferenceImage = referencePath != null &&
+        referencePath.isNotEmpty &&
+        referencePath != inspection.currentImagePath;
+    final referenceUrl = hasReferenceImage
+        ? ApiConfig.resolveAssetUrl(referencePath)
+        : null;
     final alignedUrl = inspection.alignedImagePath != null
         ? ApiConfig.resolveAssetUrl(inspection.alignedImagePath)
         : null;
@@ -348,11 +353,17 @@ class _VisualReviewTab extends StatelessWidget {
         const SizedBox(height: 8),
         Row(
           children: [
-            Expanded(child: _MiniImageTile(label: 'Original Image', url: originalUrl)),
+            Expanded(
+              child: _MiniImageTile(
+                label: 'Reference Image',
+                url: referenceUrl,
+                emptyIcon: Icons.image_search_outlined,
+              ),
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: _MiniImageTile(
-                label: 'Aligned Image',
+                label: 'Aligned Inspection',
                 url: alignedUrl,
                 emptyIcon: Icons.align_horizontal_center_outlined,
               ),
@@ -407,12 +418,6 @@ class _DetectTab extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       children: [
         _ImageCard(
-          title: 'Original Image',
-          icon: Icons.photo_outlined,
-          url: ApiConfig.resolveAssetUrl(inspection.currentImagePath),
-        ),
-        const SizedBox(height: 14),
-        _ImageCard(
           title: 'Detected Damage',
           subtitle: 'Highlighted areas show possible damage found in this inspection.',
           icon: Icons.manage_search_outlined,
@@ -420,16 +425,6 @@ class _DetectTab extends StatelessWidget {
               ? ApiConfig.resolveAssetUrl(inspection.annotatedImagePath)
               : null,
           emptyLabel: 'No annotated image available.',
-        ),
-        const SizedBox(height: 14),
-        _ImageCard(
-          title: 'Aligned Image',
-          subtitle: 'Image prepared for comparison with the reference.',
-          icon: Icons.compare_outlined,
-          url: inspection.alignedImagePath != null
-              ? ApiConfig.resolveAssetUrl(inspection.alignedImagePath)
-              : null,
-          emptyLabel: 'No aligned image available. Initialize Golden Pose first.',
         ),
         const SizedBox(height: 20),
         _buildDetectionList(context, detections),
