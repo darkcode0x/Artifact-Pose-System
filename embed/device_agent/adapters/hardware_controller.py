@@ -36,7 +36,7 @@ class HardwareController:
 
     # Vi tri home mac dinh cua servo (do). Dung lam diem chuan truoc khi chup anh.
     HOME_YAW: int = 110
-    HOME_PITCH: int = 50
+    HOME_PITCH: int = 35
 
     def __init__(
         self,
@@ -219,4 +219,3 @@ class HardwareController:
             time.sleep(effective_pulse_delay)
             self._gpio.output(pul_pin, self._gpio.LOW)
             time.sleep(effective_pulse_delay)
-

@@ -228,6 +228,11 @@ class MainApp:
         self._resolve_device_id()
 
         self.hardware = HardwareController()
+        print(
+            "[APP] Servo home dang dung: "
+            f"Pan/Yaw={self.hardware.HOME_YAW}°  "
+            f"Tilt/Pitch={self.hardware.HOME_PITCH}°"
+        )
         self.camera = CameraManager(output_dir=config.image_dir)
         self._processed_task_ids = ExpiringTaskIdStore(
             ttl_sec=self.config.task_id_ttl_sec,

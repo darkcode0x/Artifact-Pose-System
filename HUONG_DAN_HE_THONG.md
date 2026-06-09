@@ -326,7 +326,7 @@ Mặc định trong `hardware_controller.py`:
 | Servo pan channel | `0` |
 | Servo tilt channel | `1` |
 | Home yaw | `110°` |
-| Home pitch | `50°` |
+| Home pitch | `35°` |
 | X PUL/DIR | GPIO `17` / `27` |
 | Z PUL/DIR | GPIO `22` / `23` |
 | Microstep | `32` |
