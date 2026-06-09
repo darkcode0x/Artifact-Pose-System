@@ -37,6 +37,10 @@ class InspectionService:
         self._mqtt_bridge = mqtt_bridge
         self._alignment_counters: dict[str, int] = {}
         self._alignment_start_ts: dict[str, float] = {}
+        # Phase per alignment session: 0 = Translation (X,Z steppers first)
+        #                              1 = Rotation (Pan,Tilt servos)
+        # Always starts at 0 and alternates each dispatched move.
+        self._alignment_phase: dict[str, int] = {}
 
     async def _save_file(
         self, file: UploadFile, artifact_id: str | None = None
@@ -691,6 +695,9 @@ class InspectionService:
         if auto_alignment_loop and device_id:
             self._alignment_counters[alignment_key] = self._alignment_counters.get(alignment_key, 0) + 1
             current_iter = self._alignment_counters[alignment_key]
+            # Phase 0 (translation) is always the starting phase for a fresh session.
+            if alignment_key not in self._alignment_phase:
+                self._alignment_phase[alignment_key] = 0
             max_iter = self._settings.max_alignment_iterations
             capture_metadata["alignment_iteration"] = current_iter
             capture_metadata["alignment_max_iterations"] = max_iter
@@ -711,6 +718,7 @@ class InspectionService:
                 self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
                 self._alignment_counters.pop(alignment_key, None)
                 self._alignment_start_ts.pop(alignment_key, None)
+                self._alignment_phase.pop(alignment_key, None)
                 failed_payload: dict[str, Any] = {
                     "action": "alignment_failed",
                     "task_id": self._command_service.build_task_id(),
@@ -745,38 +753,103 @@ class InspectionService:
                 self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
 
             if deviation and not deviation.get("within_tolerance", True):
-                # Pose needs correction — dispatch a move command
+                # ── Interleaved phase correction ────────────────────────────────
+                # Phase 0 → Translation only (X, Z steppers).  Always runs first.
+                # Phase 1 → Rotation only   (Pan, Tilt servos). Runs after steppers.
+                # Alternates: 0 → 1 → 0 → 1 … until both axes are within tolerance.
+                # Smart-skip: if current phase's axis is already converged, jump ahead.
                 motor_cmd = pose_result.get("motor_command")
                 if motor_cmd and device_id:
-                    # C++ tra ve: move_x (steps, co dau), move_z (steps, co dau),
-                    # rotate_pan (do), rotate_tilt (do).
-                    # Pi doc: x_steps (duong), x_dir (+1/-1), z_steps (duong), z_dir,
-                    # yaw_delta (do), pitch_delta (do).
-                    # Can chuyen ten field de tranh Pi nhan lenh nhung khong di chuyen gi.
-                    raw_move_x   = float(motor_cmd.get("move_x",      0))
-                    raw_move_z   = float(motor_cmd.get("move_z",      0))
-                    raw_pan      = float(motor_cmd.get("rotate_pan",  0))
-                    raw_tilt     = float(motor_cmd.get("rotate_tilt", 0))
-                    mc_payload: dict[str, Any] = {
-                        "action": "move",
-                        "task_id": self._command_service.build_task_id(),
-                        "artifact_id": artifact_id,
-                        "x_steps": abs(int(round(raw_move_x))),
-                        "x_dir":   1 if raw_move_x >= 0 else -1,
-                        "z_steps": abs(int(round(raw_move_z))),
-                        "z_dir":   1 if raw_move_z >= 0 else -1,
-                        "yaw_delta":   raw_pan,
-                        "pitch_delta": raw_tilt,
-                        "workflow": workflow,
-                    }
+                    raw_move_x = float(motor_cmd.get("move_x",     0))
+                    raw_move_z = float(motor_cmd.get("move_z",     0))
+                    raw_pan    = float(motor_cmd.get("rotate_pan",  0))
+                    raw_tilt   = float(motor_cmd.get("rotate_tilt", 0))
+
+                    within_trans = bool(deviation.get("within_trans_tolerance", False))
+                    within_rot   = bool(deviation.get("within_rot_tolerance",   False))
+
+                    # Resolve active phase; default to 0 (translation) if somehow missing.
+                    current_phase = self._alignment_phase.get(alignment_key, 0)
+
+                    # Smart-skip: if this phase's axis is already within tolerance,
+                    # advance immediately to the other phase (avoids a wasted round-trip).
+                    if current_phase == 0 and within_trans and not within_rot:
+                        current_phase = 1
+                        self._alignment_phase[alignment_key] = 1
+                        logger.info(
+                            "[alignment] Trans within tolerance → skip to ROTATION phase "
+                            "(device=%s, iter=%d)",
+                            device_id, current_iter,
+                        )
+                    elif current_phase == 1 and within_rot and not within_trans:
+                        current_phase = 0
+                        self._alignment_phase[alignment_key] = 0
+                        logger.info(
+                            "[alignment] Rot within tolerance → skip to TRANSLATION phase "
+                            "(device=%s, iter=%d)",
+                            device_id, current_iter,
+                        )
+
+                    if current_phase == 0:
+                        # ── Phase 0: Translation — X, Z steppers only ──────────
+                        mc_payload: dict[str, Any] = {
+                            "action": "move",
+                            "task_id": self._command_service.build_task_id(),
+                            "artifact_id": artifact_id,
+                            "x_steps": abs(int(round(raw_move_x))),
+                            "x_dir":   1 if raw_move_x >= 0 else -1,
+                            "z_steps": abs(int(round(raw_move_z))),
+                            "z_dir":   1 if raw_move_z >= 0 else -1,
+                            "yaw_delta":   0.0,   # servos held during translation
+                            "pitch_delta": 0.0,
+                            "alignment_phase": "translation",
+                            "alignment_iteration": current_iter,
+                            "workflow": workflow,
+                        }
+                        logger.info(
+                            "[alignment] Phase 0 TRANSLATION | device=%s iter=%d/%d "
+                            "x=%+.0f steps (%s)  z=%+.0f steps (%s)  [pan/tilt held at 0]",
+                            device_id, current_iter, self._settings.max_alignment_iterations,
+                            raw_move_x, "+" if raw_move_x >= 0 else "-",
+                            raw_move_z, "+" if raw_move_z >= 0 else "-",
+                        )
+                    else:
+                        # ── Phase 1: Rotation — Pan, Tilt servos only ──────────
+                        mc_payload = {
+                            "action": "move",
+                            "task_id": self._command_service.build_task_id(),
+                            "artifact_id": artifact_id,
+                            "x_steps": 0,   # steppers held during rotation
+                            "x_dir":   1,
+                            "z_steps": 0,
+                            "z_dir":   1,
+                            "yaw_delta":   raw_pan,
+                            "pitch_delta": raw_tilt,
+                            "alignment_phase": "rotation",
+                            "alignment_iteration": current_iter,
+                            "workflow": workflow,
+                        }
+                        logger.info(
+                            "[alignment] Phase 1 ROTATION    | device=%s iter=%d/%d "
+                            "pan=%+.3f°  tilt=%+.3f°  [steppers held at 0]",
+                            device_id, current_iter, self._settings.max_alignment_iterations,
+                            raw_pan, raw_tilt,
+                        )
+
+                    # Advance to the next phase so the following iteration uses the other axis.
+                    self._alignment_phase[alignment_key] = 1 - current_phase
+
                     published, result_info = self._mqtt_bridge.publish_command(device_id, mc_payload)
                     correction_dispatch = {
                         "status": "published" if published else "queued",
                         "info": result_info,
                         "alignment_iteration": current_iter,
+                        "alignment_phase": "translation" if current_phase == 0 else "rotation",
                     }
                     if auto_alignment_loop:
-                        capture_metadata["alignment_status"] = "correcting"
+                        phase_label = "trans" if current_phase == 0 else "rot"
+                        capture_metadata["alignment_status"] = f"correcting_{phase_label}"
+                        capture_metadata["alignment_phase"] = "translation" if current_phase == 0 else "rotation"
                         self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
             elif auto_alignment_loop and device_id:
                 if deviation is None:
@@ -808,6 +881,7 @@ class InspectionService:
                     )
                     self._alignment_counters.pop(alignment_key, None)
                     self._alignment_start_ts.pop(alignment_key, None)
+                    self._alignment_phase.pop(alignment_key, None)
 
                     # Copy last captured image to distinctive final_aligned filename
                     if artifact_id:
@@ -846,6 +920,7 @@ class InspectionService:
                 self._command_service.record_latest_capture_metadata(device_id, capture_metadata)
                 self._alignment_counters.pop(alignment_key, None)
                 self._alignment_start_ts.pop(alignment_key, None)
+                self._alignment_phase.pop(alignment_key, None)
                 # Notify device that alignment failed so it stops immediately
                 exc_failed_payload: dict[str, Any] = {
                     "action": "alignment_failed",
@@ -871,3 +946,4 @@ class InspectionService:
         alignment_key = f"{device_id}:{artifact_id}"
         self._alignment_counters.pop(alignment_key, None)
         self._alignment_start_ts.pop(alignment_key, None)
+        self._alignment_phase.pop(alignment_key, None)
