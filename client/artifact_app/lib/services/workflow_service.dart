@@ -3,6 +3,7 @@ import 'api_client.dart';
 
 class WorkflowService {
   final ApiClient _api;
+  static const Duration _aiInspectionTimeout = Duration(minutes: 2);
 
   WorkflowService(this._api);
 
@@ -23,7 +24,9 @@ class WorkflowService {
   }
 
   Future<Map<String, dynamic>> getLatestMetadata(String deviceId) async {
-    final response = await _api.get('/workflows/$deviceId/latest-capture-metadata');
+    final response = await _api.get(
+      '/workflows/$deviceId/latest-capture-metadata',
+    );
     return response as Map<String, dynamic>;
   }
 
@@ -31,20 +34,14 @@ class WorkflowService {
     required String deviceId,
     required String artifactId,
   }) async {
-    return _api.startInitialization(
-      deviceId: deviceId,
-      artifactId: artifactId,
-    );
+    return _api.startInitialization(deviceId: deviceId, artifactId: artifactId);
   }
 
   Future<Map<String, dynamic>> startAlignment({
     required String deviceId,
     required String artifactId,
   }) async {
-    return _api.startAlignment(
-      deviceId: deviceId,
-      artifactId: artifactId,
-    );
+    return _api.startAlignment(deviceId: deviceId, artifactId: artifactId);
   }
 
   Future<List<Map<String, dynamic>>> pollAcks(
@@ -56,9 +53,7 @@ class WorkflowService {
       query: {'limit': limit},
     );
     if (body is Map<String, dynamic> && body['acks'] is List) {
-      return (body['acks'] as List)
-          .whereType<Map<String, dynamic>>()
-          .toList();
+      return (body['acks'] as List).whereType<Map<String, dynamic>>().toList();
     }
     return const [];
   }
@@ -76,6 +71,7 @@ class WorkflowService {
         if (description.isNotEmpty) 'description': description,
         if (createdBy != null) 'created_by': createdBy,
       },
+      timeoutOverride: _aiInspectionTimeout,
     );
     return Inspection.fromJson(body as Map<String, dynamic>);
   }

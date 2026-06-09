@@ -520,10 +520,18 @@ class InspectionService:
         except Exception as save_exc:
             logger.warning(f"[analyze] save detect image error: {save_exc}")
 
+        image_size: list[int] | None = None
+        try:
+            ah, aw = annotated.shape[:2]
+            image_size = [int(aw), int(ah)]
+        except Exception:
+            image_size = None
+
         result["all_detections"] = all_dets
         result["detections_json"] = json.dumps({
             "annotated_path": annotated_url,
             "aligned_path":   aligned_url,
+            "image_size":     image_size,
             "all_detections": all_dets,
             "ssim_summary": {
                 "ssim":       result.get("ssim"),

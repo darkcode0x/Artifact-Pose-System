@@ -1,10 +1,11 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../models/inspection.dart';
 import '../../services/api_config.dart';
 import '../../theme.dart';
-import '../../widgets/responsive_scaffold.dart';
 import '../../widgets/status_badge.dart';
 
 const _clsLabel = {
@@ -157,9 +158,9 @@ class _VisualReviewTab extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: grade.color.withOpacity(0.08),
+        color: grade.color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: grade.color.withOpacity(0.35), width: 1.5),
+        border: Border.all(color: grade.color.withValues(alpha: 0.35), width: 1.5),
       ),
       child: Column(
         children: [
@@ -174,7 +175,7 @@ class _VisualReviewTab extends StatelessWidget {
                     CircularProgressIndicator(
                       value: ssim.clamp(0.0, 1.0),
                       strokeWidth: 6,
-                      backgroundColor: grade.color.withOpacity(0.15),
+                      backgroundColor: grade.color.withValues(alpha: 0.15),
                       valueColor: AlwaysStoppedAnimation<Color>(grade.color),
                     ),
                     Text(
@@ -327,7 +328,13 @@ class _VisualReviewTab extends StatelessWidget {
   }
 
   Widget _buildImageComparison(BuildContext context) {
-    final originalUrl = ApiConfig.resolveAssetUrl(inspection.currentImagePath);
+    final referencePath = inspection.previousImagePath;
+    final hasReferenceImage = referencePath != null &&
+        referencePath.isNotEmpty &&
+        referencePath != inspection.currentImagePath;
+    final referenceUrl = hasReferenceImage
+        ? ApiConfig.resolveAssetUrl(referencePath)
+        : null;
     final alignedUrl = inspection.alignedImagePath != null
         ? ApiConfig.resolveAssetUrl(inspection.alignedImagePath)
         : null;
@@ -348,11 +355,17 @@ class _VisualReviewTab extends StatelessWidget {
         const SizedBox(height: 8),
         Row(
           children: [
-            Expanded(child: _MiniImageTile(label: 'Original Image', url: originalUrl)),
+            Expanded(
+              child: _MiniImageTile(
+                label: 'Reference Image',
+                url: referenceUrl,
+                emptyIcon: Icons.image_search_outlined,
+              ),
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: _MiniImageTile(
-                label: 'Aligned Image',
+                label: 'Aligned Inspection',
                 url: alignedUrl,
                 emptyIcon: Icons.align_horizontal_center_outlined,
               ),
@@ -402,16 +415,14 @@ class _DetectTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final detections = inspection.detections;
+    final detectionImageUrl = inspection.annotatedImagePath != null
+        ? ApiConfig.resolveAssetUrl(inspection.annotatedImagePath)
+        : null;
+    final detectionImageSize = inspection.detectionImageSize;
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _ImageCard(
-          title: 'Original Image',
-          icon: Icons.photo_outlined,
-          url: ApiConfig.resolveAssetUrl(inspection.currentImagePath),
-        ),
-        const SizedBox(height: 14),
         _ImageCard(
           title: 'Detected Damage',
           subtitle: 'Highlighted areas show possible damage found in this inspection.',
@@ -421,31 +432,31 @@ class _DetectTab extends StatelessWidget {
               : null,
           emptyLabel: 'No annotated image available.',
         ),
-        const SizedBox(height: 14),
-        _ImageCard(
-          title: 'Aligned Image',
-          subtitle: 'Image prepared for comparison with the reference.',
-          icon: Icons.compare_outlined,
-          url: inspection.alignedImagePath != null
-              ? ApiConfig.resolveAssetUrl(inspection.alignedImagePath)
-              : null,
-          emptyLabel: 'No aligned image available. Initialize Golden Pose first.',
-        ),
         const SizedBox(height: 20),
-        _buildDetectionList(context, detections),
+        _buildDetectionList(
+          context,
+          detections,
+          detectionImageUrl,
+          detectionImageSize,
+        ),
         const SizedBox(height: 24),
       ],
     );
   }
 
-  Widget _buildDetectionList(BuildContext context, List<Map<String, dynamic>> detections) {
+  Widget _buildDetectionList(
+    BuildContext context,
+    List<Map<String, dynamic>> detections,
+    String? detectionImageUrl,
+    List<double>? detectionImageSize,
+  ) {
     if (detections.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: AppColors.statusGood.withOpacity(0.08),
+          color: AppColors.statusGood.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.statusGood.withOpacity(0.3)),
+          border: Border.all(color: AppColors.statusGood.withValues(alpha: 0.3)),
         ),
         child: const Row(
           children: [
@@ -480,6 +491,7 @@ class _DetectTab extends StatelessWidget {
               ((detection['confidence'] as num?)?.toDouble() ?? 0.0) * 100;
           final regionSsim =
               (detection['region_ssim'] as num?)?.toDouble();
+          final bbox = _bboxFromDetection(detection);
           final confColor = confidence >= 65
               ? AppColors.statusDamaged
               : confidence >= 40
@@ -491,11 +503,12 @@ class _DetectTab extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: confColor.withOpacity(0.07),
+                color: confColor.withValues(alpha: 0.07),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: confColor.withOpacity(0.25)),
+                border: Border.all(color: confColor.withValues(alpha: 0.25)),
               ),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(Icons.warning_amber_rounded, size: 18, color: confColor),
                   const SizedBox(width: 10),
@@ -507,6 +520,7 @@ class _DetectTab extends StatelessWidget {
                           name.isNotEmpty ? name : 'Unknown',
                           style: const TextStyle(fontWeight: FontWeight.w500),
                         ),
+                        const SizedBox(height: 3),
                         if (regionSsim != null)
                           Text(
                             'Region Similarity: ${(regionSsim * 100).toStringAsFixed(1)}%',
@@ -515,15 +529,23 @@ class _DetectTab extends StatelessWidget {
                               color: AppColors.textMuted,
                             ),
                           ),
+                        Text(
+                          'AI Confidence: ${confidence.toStringAsFixed(1)}%',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: confColor,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                  Text(
-                    '${confidence.toStringAsFixed(1)}%',
-                    style: TextStyle(
-                      color: confColor,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  const SizedBox(width: 10),
+                  _DetectionBboxThumb(
+                    imageUrl: detectionImageUrl,
+                    imageSize: detectionImageSize,
+                    bbox: bbox,
+                    title: name.isNotEmpty ? '$name region' : 'Detection region',
                   ),
                 ],
               ),
@@ -533,6 +555,327 @@ class _DetectTab extends StatelessWidget {
       ],
     );
   }
+}
+
+class _BboxRect {
+  final double x1;
+  final double y1;
+  final double x2;
+  final double y2;
+
+  const _BboxRect(this.x1, this.y1, this.x2, this.y2);
+
+  double get left => math.min(x1, x2);
+  double get top => math.min(y1, y2);
+  double get right => math.max(x1, x2);
+  double get bottom => math.max(y1, y2);
+  double get width => math.max(1, right - left);
+  double get height => math.max(1, bottom - top);
+  double get centerX => left + width / 2;
+  double get centerY => top + height / 2;
+  double get aspectRatio => width / height;
+
+  bool get isValid => width > 1 && height > 1;
+
+  _BboxRect clamped(double imageWidth, double imageHeight) {
+    final nx1 = left.clamp(0.0, imageWidth);
+    final ny1 = top.clamp(0.0, imageHeight);
+    final nx2 = right.clamp(0.0, imageWidth);
+    final ny2 = bottom.clamp(0.0, imageHeight);
+    return _BboxRect(nx1, ny1, nx2, ny2);
+  }
+}
+
+_BboxRect? _bboxFromDetection(Map<String, dynamic> detection) {
+  final raw = detection['bbox_xyxy'];
+  if (raw is! List || raw.length < 4) return null;
+  final x1 = (raw[0] as num?)?.toDouble();
+  final y1 = (raw[1] as num?)?.toDouble();
+  final x2 = (raw[2] as num?)?.toDouble();
+  final y2 = (raw[3] as num?)?.toDouble();
+  if (x1 == null || y1 == null || x2 == null || y2 == null) return null;
+  final bbox = _BboxRect(x1, y1, x2, y2);
+  return bbox.isValid ? bbox : null;
+}
+
+class _DetectionBboxThumb extends StatelessWidget {
+  final String? imageUrl;
+  final List<double>? imageSize;
+  final _BboxRect? bbox;
+  final String title;
+
+  const _DetectionBboxThumb({
+    required this.imageUrl,
+    required this.imageSize,
+    required this.bbox,
+    required this.title,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (imageUrl == null || imageUrl!.isEmpty || bbox == null) {
+      return _bboxPlaceholder();
+    }
+
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => _BboxRegionPage(
+            imageUrl: imageUrl!,
+            imageSize: imageSize,
+            bbox: bbox!,
+            title: title,
+          ),
+          fullscreenDialog: true,
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: SizedBox(
+          width: 92,
+          height: 74,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _BboxRegionImage(
+                imageUrl: imageUrl!,
+                imageSize: imageSize,
+                bbox: bbox!,
+              ),
+              Positioned(
+                right: 4,
+                bottom: 4,
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Icon(
+                    Icons.zoom_out_map,
+                    color: Colors.white,
+                    size: 13,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BboxRegionImage extends StatefulWidget {
+  final String imageUrl;
+  final List<double>? imageSize;
+  final _BboxRect bbox;
+
+  const _BboxRegionImage({
+    required this.imageUrl,
+    required this.imageSize,
+    required this.bbox,
+  });
+
+  @override
+  State<_BboxRegionImage> createState() => _BboxRegionImageState();
+}
+
+class _BboxRegionImageState extends State<_BboxRegionImage> {
+  ImageStream? _imageStream;
+  ImageStreamListener? _imageListener;
+  List<double>? _resolvedImageSize;
+
+  List<double>? get _effectiveImageSize =>
+      widget.imageSize ?? _resolvedImageSize;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _resolveImageSizeIfNeeded();
+  }
+
+  @override
+  void didUpdateWidget(covariant _BboxRegionImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.imageUrl != widget.imageUrl ||
+        oldWidget.imageSize != widget.imageSize) {
+      _removeImageListener();
+      _resolvedImageSize = null;
+      _resolveImageSizeIfNeeded();
+    }
+  }
+
+  @override
+  void dispose() {
+    _removeImageListener();
+    super.dispose();
+  }
+
+  void _resolveImageSizeIfNeeded() {
+    if (widget.imageSize != null || _resolvedImageSize != null) return;
+
+    final stream = NetworkImage(widget.imageUrl).resolve(
+      createLocalImageConfiguration(context),
+    );
+    final listener = ImageStreamListener((info, _) {
+      if (!mounted) return;
+      setState(() {
+        _resolvedImageSize = [
+          info.image.width.toDouble(),
+          info.image.height.toDouble(),
+        ];
+      });
+    });
+
+    _imageStream = stream;
+    _imageListener = listener;
+    stream.addListener(listener);
+  }
+
+  void _removeImageListener() {
+    final stream = _imageStream;
+    final listener = _imageListener;
+    if (stream != null && listener != null) {
+      stream.removeListener(listener);
+    }
+    _imageStream = null;
+    _imageListener = null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = _effectiveImageSize;
+    if (size == null || size.length < 2 || size[0] <= 0 || size[1] <= 0) {
+      return Container(
+        color: AppColors.surfaceMuted,
+        child: const Center(
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+
+    final imageWidth = size[0];
+    final imageHeight = size[1];
+    final bbox = widget.bbox.clamped(imageWidth, imageHeight);
+    if (!bbox.isValid) return _bboxPlaceholder();
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final viewWidth = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : 120.0;
+        final viewHeight = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : 90.0;
+        final scale = math.max(viewWidth / bbox.width, viewHeight / bbox.height);
+        final left = viewWidth / 2 - bbox.centerX * scale;
+        final top = viewHeight / 2 - bbox.centerY * scale;
+
+        return ClipRect(
+          child: Stack(
+            children: [
+              Positioned(
+                left: left,
+                top: top,
+                width: imageWidth * scale,
+                height: imageHeight * scale,
+                child: Image.network(
+                  widget.imageUrl,
+                  fit: BoxFit.fill,
+                  errorBuilder: (_, __, ___) => _bboxPlaceholder(),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _BboxRegionPage extends StatelessWidget {
+  final String imageUrl;
+  final List<double>? imageSize;
+  final _BboxRect bbox;
+  final String title;
+
+  const _BboxRegionPage({
+    required this.imageUrl,
+    required this.imageSize,
+    required this.bbox,
+    required this.title,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final aspectRatio = bbox.aspectRatio.clamp(0.35, 2.8);
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text(
+          title,
+          style: const TextStyle(fontSize: 14, color: Colors.white),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.close, color: Colors.white),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ],
+      ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final maxWidth = constraints.maxWidth;
+          final maxHeight = constraints.maxHeight;
+          var width = maxWidth;
+          var height = width / aspectRatio;
+          if (height > maxHeight) {
+            height = maxHeight;
+            width = height * aspectRatio;
+          }
+
+          return Center(
+            child: InteractiveViewer(
+              minScale: 0.8,
+              maxScale: 8.0,
+              child: SizedBox(
+                width: width,
+                height: height,
+                child: _BboxRegionImage(
+                  imageUrl: imageUrl,
+                  imageSize: imageSize,
+                  bbox: bbox,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+Widget _bboxPlaceholder() {
+  return ClipRRect(
+    borderRadius: BorderRadius.circular(8),
+    child: Container(
+      width: 92,
+      height: 74,
+      color: AppColors.surfaceMuted,
+      child: const Center(
+        child: Icon(
+          Icons.crop_free,
+          color: AppColors.textFaint,
+          size: 24,
+        ),
+      ),
+    ),
+  );
 }
 
 class _ImageCard extends StatelessWidget {
@@ -811,7 +1154,7 @@ class _SsimBar extends StatelessWidget {
           child: LinearProgressIndicator(
             value: value.clamp(0.0, 1.0),
             minHeight: bold ? 8 : 5,
-            backgroundColor: color.withOpacity(0.15),
+            backgroundColor: color.withValues(alpha: 0.15),
             valueColor: AlwaysStoppedAnimation<Color>(color),
           ),
         ),

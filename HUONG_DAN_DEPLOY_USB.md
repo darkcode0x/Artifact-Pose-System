@@ -257,6 +257,14 @@ Script sẽ:
 - bind/attach USB vào WSL;
 - chạy `adb reverse tcp:8000 tcp:8000`.
 
+Các lệnh chính mà script thực hiện:
+
+```powershell
+usbipd list
+usbipd bind --busid 2-3
+usbipd attach --wsl --busid 2-3
+```
+
 Nếu USB đã attach vào WSL rồi, chạy trực tiếp trong WSL:
 
 ```bash
@@ -614,3 +622,162 @@ Nếu thay model, restart server.
 - Các route app như artifacts, schedules, workflows, models, pose manual cần JWT.
 - `POST /pose/initialize_golden` cho phép JWT hoặc device đã có trong registry, để Pi upload stereo pair mà không cần tài khoản app.
 - `POST /inspections/upload` là endpoint Pi upload ảnh alignment/inspection, hiện vẫn dành cho device agent trong mạng nội bộ.
+
+---
+
+## 14. Dọn Database An Toàn
+
+Chạy từ thư mục project hoặc bất kỳ đâu cũng được, miễn container `artifact_postgres` đang chạy.
+
+### 14.1. Backup database trước
+
+```bash
+mkdir -p backups
+
+docker exec artifact_postgres pg_dump \
+  -U artifact \
+  -d artifact_auth \
+  -Fc \
+  -f /tmp/artifact_auth_$(date +%Y%m%d_%H%M%S).dump
+
+docker cp artifact_postgres:/tmp/$(docker exec artifact_postgres sh -c "ls -t /tmp/artifact_auth_*.dump | head -1 | xargs basename") ./backups/
+```
+
+### 14.2. Kiểm tra nhanh dữ liệu hiện có
+
+```bash
+docker exec -it artifact_postgres psql -U artifact -d artifact_auth -c "
+SELECT 'artifacts' AS table, COUNT(*) FROM artifacts
+UNION ALL SELECT 'images', COUNT(*) FROM images
+UNION ALL SELECT 'image_comparisons', COUNT(*) FROM image_comparisons
+UNION ALL SELECT 'alerts', COUNT(*) FROM alerts
+UNION ALL SELECT 'schedules', COUNT(*) FROM schedules;
+"
+```
+
+### 14.3. Dọn lịch sử kiểm tra nhưng giữ cổ vật, user, ảnh baseline
+
+Lệnh này xóa:
+
+- alerts;
+- lịch sử comparison;
+- ảnh inspection trong DB.
+
+Lệnh này không xóa artifact, user, baseline image.
+
+```bash
+docker exec -it artifact_postgres psql -U artifact -d artifact_auth -c "
+BEGIN;
+
+DELETE FROM alerts;
+DELETE FROM image_comparisons;
+DELETE FROM images WHERE image_type = 'inspection';
+
+COMMIT;
+"
+```
+
+### 14.4. Reset trạng thái artifact về `good` nếu cần
+
+```bash
+docker exec -it artifact_postgres psql -U artifact -d artifact_auth -c "
+UPDATE artifacts SET status = 'good';
+"
+```
+
+### 14.5. Dọn file ảnh inspection/heatmap/detect trên volume nếu muốn
+
+> Cẩn thận: lệnh này xóa file runtime trong uploads, nên chỉ chạy sau khi đã backup hoặc chắc chắn muốn dọn.
+
+```bash
+docker exec artifact_server sh -c "
+find /app/data/uploads/artifacts -type f \
+  \( -name 'inspection_*' -o -name 'heatmap_*' -o -name 'detect_*' -o -name 'aligned_*' -o -name 'final_aligned_*' \) \
+  -delete
+"
+```
+
+---
+
+## 15. Xóa Sạch Dữ Liệu Nghiệp Vụ Nhưng Giữ User/Admin
+
+Các lệnh dưới đây xóa dữ liệu nghiệp vụ nhưng giữ bảng `users`.
+
+Sẽ xóa:
+
+- `artifacts`
+- `images`
+- `image_comparisons`
+- `alerts`
+- `schedules`
+- `iot_devices` nếu chạy bước reset thiết bị
+
+Không xóa:
+
+- `users`
+
+### 15.1. Backup trước
+
+```bash
+mkdir -p backups
+
+docker exec artifact_postgres pg_dump \
+  -U artifact \
+  -d artifact_auth \
+  -Fc \
+  -f /tmp/artifact_auth_clean_before_$(date +%Y%m%d_%H%M%S).dump
+
+docker cp artifact_postgres:/tmp/$(docker exec artifact_postgres sh -c "ls -t /tmp/artifact_auth_clean_before_*.dump | head -1 | xargs basename") ./backups/
+```
+
+### 15.2. Xóa sạch dữ liệu nghiệp vụ, giữ `users`
+
+```bash
+docker exec -it artifact_postgres psql -U artifact -d artifact_auth -c "
+BEGIN;
+
+TRUNCATE TABLE
+  alerts,
+  image_comparisons,
+  schedules,
+  images,
+  artifacts
+RESTART IDENTITY CASCADE;
+
+COMMIT;
+"
+```
+
+### 15.3. Reset luôn thiết bị IoT nếu cần
+
+Chỉ chạy nếu bạn muốn app/server quên danh sách thiết bị cũ.
+
+```bash
+docker exec -it artifact_postgres psql -U artifact -d artifact_auth -c "
+TRUNCATE TABLE iot_devices RESTART IDENTITY CASCADE;
+"
+```
+
+### 15.4. Xóa file uploads/model output liên quan artifact
+
+Lệnh này xóa toàn bộ ảnh nghiệp vụ đã upload/chụp. Không đụng DB user.
+
+```bash
+docker exec artifact_server sh -c "
+rm -rf /app/data/uploads/artifacts
+mkdir -p /app/data/uploads/artifacts
+"
+```
+
+### 15.5. Kiểm tra lại
+
+```bash
+docker exec -it artifact_postgres psql -U artifact -d artifact_auth -c "
+SELECT 'users' AS table, COUNT(*) FROM users
+UNION ALL SELECT 'artifacts', COUNT(*) FROM artifacts
+UNION ALL SELECT 'images', COUNT(*) FROM images
+UNION ALL SELECT 'image_comparisons', COUNT(*) FROM image_comparisons
+UNION ALL SELECT 'alerts', COUNT(*) FROM alerts
+UNION ALL SELECT 'schedules', COUNT(*) FROM schedules;
+"
+```

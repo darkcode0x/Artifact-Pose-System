@@ -89,13 +89,13 @@ class Inspection {
 
   /// Parse YOLO detections from detectionsJson.
   /// Returns flat list of detection maps with class_name, confidence, bbox_xyxy.
-  /// Prefers enriched all_detections (has crop_path, crop_region_ssim) when available.
+  /// Prefers enriched all_detections when available.
   List<Map<String, dynamic>> get detections {
     if (detectionsJson == null || detectionsJson!.isEmpty) return [];
     try {
       final parsed = jsonDecode(detectionsJson!);
       if (parsed is Map) {
-        // Prefer enriched all_detections (has crop_path, crop_region_ssim)
+        // Prefer enriched all_detections.
         final enriched = parsed['all_detections'];
         if (enriched is List && enriched.isNotEmpty) {
           return enriched.map((d) => Map<String, dynamic>.from(d as Map)).toList();
@@ -115,8 +115,26 @@ class Inspection {
     return [];
   }
 
-  /// SSIM-based crop regions with per-region metadata.
-  /// Keys: index, crop_path, region_bbox, region_ssim, area_pct
+  /// Natural size of the annotated detection image as [width, height].
+  List<double>? get detectionImageSize {
+    if (detectionsJson == null || detectionsJson!.isEmpty) return null;
+    try {
+      final parsed = jsonDecode(detectionsJson!);
+      if (parsed is Map) {
+        final rawSize = parsed['image_size'];
+        if (rawSize is List && rawSize.length >= 2) {
+          final width = (rawSize[0] as num?)?.toDouble();
+          final height = (rawSize[1] as num?)?.toDouble();
+          if (width != null && height != null && width > 0 && height > 0) {
+            return [width, height];
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Legacy SSIM-based crop region metadata, when present in older payloads.
   List<Map<String, dynamic>> get cropRegions {
     if (detectionsJson == null || detectionsJson!.isEmpty) return [];
     try {

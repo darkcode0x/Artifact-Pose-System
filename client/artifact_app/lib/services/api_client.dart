@@ -25,8 +25,8 @@ class ApiClient {
     http.Client? httpClient,
     this.timeout = const Duration(seconds: 30),
     this.onUnauthorized,
-  })  : _tokens = tokens,
-        _http = httpClient ?? http.Client();
+  }) : _tokens = tokens,
+       _http = httpClient ?? http.Client();
 
   Future<Map<String, String>> _headers({bool json = true}) async {
     final headers = <String, String>{};
@@ -38,39 +38,60 @@ class ApiClient {
     return headers;
   }
 
-  Future<dynamic> get(String path, {Map<String, dynamic>? query}) async {
+  Future<dynamic> get(
+    String path, {
+    Map<String, dynamic>? query,
+    Duration? timeoutOverride,
+  }) async {
     final res = await _http
         .get(ApiConfig.uri(path, query), headers: await _headers(json: false))
-        .timeout(timeout);
+        .timeout(timeoutOverride ?? timeout);
     return _decode(res);
   }
 
-  Future<dynamic> post(String path, {Object? body, Map<String, dynamic>? query}) async {
+  Future<dynamic> post(
+    String path, {
+    Object? body,
+    Map<String, dynamic>? query,
+    Duration? timeoutOverride,
+  }) async {
     final res = await _http
         .post(
           ApiConfig.uri(path, query),
           headers: await _headers(),
           body: body == null ? null : jsonEncode(body),
         )
-        .timeout(timeout);
+        .timeout(timeoutOverride ?? timeout);
     return _decode(res);
   }
 
-  Future<dynamic> patch(String path, {Object? body, Map<String, dynamic>? query}) async {
+  Future<dynamic> patch(
+    String path, {
+    Object? body,
+    Map<String, dynamic>? query,
+    Duration? timeoutOverride,
+  }) async {
     final res = await _http
         .patch(
           ApiConfig.uri(path, query),
           headers: await _headers(),
           body: body == null ? null : jsonEncode(body),
         )
-        .timeout(timeout);
+        .timeout(timeoutOverride ?? timeout);
     return _decode(res);
   }
 
-  Future<void> delete(String path, {Map<String, dynamic>? query}) async {
+  Future<void> delete(
+    String path, {
+    Map<String, dynamic>? query,
+    Duration? timeoutOverride,
+  }) async {
     final res = await _http
-        .delete(ApiConfig.uri(path, query), headers: await _headers(json: false))
-        .timeout(timeout);
+        .delete(
+          ApiConfig.uri(path, query),
+          headers: await _headers(json: false),
+        )
+        .timeout(timeoutOverride ?? timeout);
     _decode(res, allowEmpty: true);
   }
 
@@ -79,6 +100,7 @@ class ApiClient {
     required XFile file,
     String fieldName = 'file',
     Map<String, String>? fields,
+    Duration? timeoutOverride,
   }) async {
     final request = http.MultipartRequest('POST', ApiConfig.uri(path));
     request.headers.addAll(await _headers(json: false));
@@ -86,19 +108,16 @@ class ApiClient {
 
     if (kIsWeb) {
       final bytes = await file.readAsBytes();
-      request.files.add(http.MultipartFile.fromBytes(
-        fieldName,
-        bytes,
-        filename: file.name,
-      ));
+      request.files.add(
+        http.MultipartFile.fromBytes(fieldName, bytes, filename: file.name),
+      );
     } else {
-      request.files.add(await http.MultipartFile.fromPath(
-        fieldName,
-        file.path,
-      ));
+      request.files.add(
+        await http.MultipartFile.fromPath(fieldName, file.path),
+      );
     }
-    
-    final streamed = await request.send().timeout(timeout);
+
+    final streamed = await request.send().timeout(timeoutOverride ?? timeout);
     final response = await http.Response.fromStream(streamed);
     return _decode(response);
   }
@@ -140,9 +159,7 @@ class ApiClient {
   }) async {
     final res = await post(
       '/workflows/$deviceId/start-initialization',
-      body: {
-        'artifact_id': artifactId,
-      },
+      body: {'artifact_id': artifactId},
     );
     return Map<String, dynamic>.from(res as Map);
   }
