@@ -13,7 +13,7 @@ Artifact-Pose-System/
 ├── client/artifact_app/    Flutter Android app
 ├── embed/device_agent/     Agent chạy trên Raspberry Pi
 ├── model/                  File model YOLO *.pt được mount vào container
-└── scripts/                Script hỗ trợ adb reverse qua USB/WSL
+└── artifact_db.sql         Schema PostgreSQL tham chiếu
 ```
 
 Luồng chạy thực tế:
@@ -197,7 +197,7 @@ Docker Compose mount thư mục:
 File model hiện có:
 
 ```text
-model/new-10-05-best.pt
+model/best_Quyen.pt
 ```
 
 Server tự scan file `*.pt` đầu tiên trong `/app/model` và load với tên mặc định `default` khi khởi động.
@@ -218,7 +218,7 @@ TOKEN="<admin_access_token>"
 curl -X POST http://127.0.0.1:8000/models/load \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name":"default","path":"/app/model/new-10-05-best.pt","backend":"auto","labels":[]}'
+  -d '{"name":"default","path":"/app/model/best_Quyen.pt","backend":"auto","labels":[]}'
 ```
 
 ---
@@ -242,34 +242,21 @@ adb devices
 
 Thiết bị phải ở trạng thái `device`, không phải `unauthorized`.
 
-### 6.2. Thiết lập tunnel bằng script
+### 6.2. Thiết lập tunnel thủ công
 
-Từ Windows PowerShell:
-
-```powershell
-cd \\wsl.localhost\Ubuntu-22.04\home\thepiece\System\Artifact-Pose-System
-powershell -ExecutionPolicy Bypass -File scripts\attach_android_usb.ps1
-```
-
-Script sẽ:
-
-- tìm Android device bằng `usbipd`;
-- bind/attach USB vào WSL;
-- chạy `adb reverse tcp:8000 tcp:8000`.
-
-Các lệnh chính mà script thực hiện:
+Nếu dùng WSL2 và Android cắm USB ở Windows, attach thiết bị vào WSL từ Windows PowerShell:
 
 ```powershell
 usbipd list
-usbipd bind --busid 2-3
-usbipd attach --wsl --busid 2-3
+usbipd bind --busid <BUSID>
+usbipd attach --wsl --busid <BUSID>
 ```
 
-Nếu USB đã attach vào WSL rồi, chạy trực tiếp trong WSL:
+Trong WSL, kiểm tra thiết bị và tạo tunnel:
 
 ```bash
-cd /home/thepiece/System/Artifact-Pose-System
-./scripts/wsl_adb_setup.sh
+adb devices
+adb reverse tcp:8000 tcp:8000
 ```
 
 Kiểm tra tunnel:
@@ -519,8 +506,7 @@ docker compose --env-file .env.docker up -d --build
 curl http://127.0.0.1:8000/health
 
 # 2. USB tunnel cho Android
-cd /home/thepiece/System/Artifact-Pose-System
-./scripts/wsl_adb_setup.sh
+adb reverse tcp:8000 tcp:8000
 
 # 3. Flutter app qua USB
 cd client/artifact_app

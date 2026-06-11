@@ -85,7 +85,7 @@ ROT_TOLERANCE = float(os.environ.get("ROT_TOLERANCE_DEG", "3.0"))               
 
 # Motor hardware constants
 SERVO_MIN_DEG = 1.0      # Minimum servo rotation step (degrees)
-SEQUENTIAL_MODE = True   # Translation first, rotation on next iteration
+SEQUENTIAL_MODE = False  # Server-side phase interleaving handles trans/rot alternation
 STEPS_PER_MM = float(os.environ.get("STEPS_PER_MM", "800.0"))  # Stepper motor steps per mm
 
 

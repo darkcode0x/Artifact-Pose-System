@@ -43,14 +43,12 @@ Mobile App
 
 ```text
 Artifact-Pose-System/
-├── HUONG_DAN_DEPLOY_USB.md              Hướng dẫn deploy PC, Android, Pi
-├── HUONG_DAN_HE_THONG.md                Tài liệu hệ thống này
-├── PROJECT_AUDIT_REPORT.md              Báo cáo audit cấu trúc dự án
+├── README.md                            Tổng quan ngắn về dự án
+├── DEPLOY_INSTRUCTION.md                Hướng dẫn deploy PC, Android, Pi
+├── SYSTEM_INSTRUCTION.md                Tài liệu hệ thống này
+├── artifact_db.sql                      Schema PostgreSQL tham chiếu
 ├── model/
-│   └── new-10-05-best.pt                Model AI hiện có
-├── scripts/
-│   ├── attach_android_usb.ps1           Attach Android USB vào WSL và adb reverse
-│   └── wsl_adb_setup.sh                 Tạo adb reverse trong WSL
+│   └── best_Quyen.pt                    Model AI hiện có
 ├── server/
 │   ├── docker-compose.yml               Postgres + Mosquitto + FastAPI
 │   ├── Dockerfile                       Build runtime và native pose solver
@@ -841,7 +839,7 @@ Server:
   docker compose --env-file .env.docker up -d
 
 Android USB:
-  ./scripts/wsl_adb_setup.sh
+  adb reverse tcp:8000 tcp:8000
   flutter build apk --release --dart-define=API_BASE_URL=http://127.0.0.1:8000
 
 Pi:

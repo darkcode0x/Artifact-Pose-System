@@ -43,20 +43,12 @@ class PoseService:
         return self._settings.artifact_golden_pose
 
     def _resolve_golden_pose_path(self, artifact_id: str | None) -> Path | None:
-        """Tra ve path golden_pose ton tai thuc su.
-
-        Thu tu uu tien:
-        1. Per-artifact path (golden_poses/{id}/golden_pose.yaml)
-        2. Legacy global path (golden_pose.yaml) — chi dung khi per-artifact chua co
-           va artifact_id khong rong. Khi tim thay, tu dong migrate sang per-artifact.
-        """
         per_artifact = self._golden_pose_path(artifact_id)
         if per_artifact.exists():
             return per_artifact
 
-        # Fallback: check file global cu (truoc khi co per-artifact)
         global_path = self._settings.artifact_golden_pose
-        # Also check old data/golden_poses/{id}/ path (truoc khi chuyen vao uploads/)
+
         old_data_path = (
             self._settings.data_dir / "golden_poses" / artifact_id.strip() / "golden_pose.yaml"
             if artifact_id and artifact_id.strip() else None
@@ -68,7 +60,7 @@ class PoseService:
             source = global_path
 
         if source is not None:
-            # Tu dong migrate sang per-artifact path
+
             per_artifact.parent.mkdir(parents=True, exist_ok=True)
             import shutil
             shutil.copy2(str(source), str(per_artifact))

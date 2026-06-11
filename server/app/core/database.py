@@ -43,8 +43,7 @@ Base = declarative_base()
 
 
 def init_auth_database() -> None:
-    # Import from app.models to ensure all classes are registered on Base.metadata
-    import app.models  # noqa: F401
+    import app.models  
     Base.metadata.create_all(bind=engine)
 
 

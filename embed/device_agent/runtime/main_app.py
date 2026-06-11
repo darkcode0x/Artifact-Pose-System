@@ -647,7 +647,18 @@ class MainApp:
         pitch_delta_applied = pitch_target - self.hardware.current_pitch
         x_steps_before = self.hardware.current_x_steps
         z_steps_before = self.hardware.current_z_steps
+
+        # ── Phân biệt pha căn chỉnh (alignment_phase) ─────────────────────────
+        # Server gửi alignment_phase="translation" hoặc "rotation" để đảm bảo
+        # thiết bị chỉ thực hiện MỘT loại động cơ mỗi lần, luân phiên hoàn toàn.
+        #   "translation" → chỉ chạy stepper X và Z, servo KHÔNG được gọi.
+        #   "rotation"    → chỉ chạy servo Pan/Tilt, stepper KHÔNG được gọi.
+        # Nếu không có alignment_phase (lệnh thông thường) → chạy song song như cũ.
+        alignment_phase = str(command.get("alignment_phase", "")).strip().lower()
+
         print(f"[MOVE] --- Bat dau lenh di chuyen ---")
+        if alignment_phase:
+            print(f"[MOVE]  Alignment phase: {alignment_phase.upper()}")
         print(f"[MOVE]  Pan (Yaw)  : {self.hardware.current_yaw:>3}° + ({yaw_delta_applied:+.1f}°) -> {yaw_target:.1f}°")
         print(f"[MOVE]  Tilt(Pitch): {self.hardware.current_pitch:>3}° + ({pitch_delta_applied:+.1f}°) -> {pitch_target:.1f}°")
         if x_steps > 0:
@@ -659,14 +670,44 @@ class MainApp:
         if x_steps == 0 and z_steps == 0 and abs(yaw_delta_applied) < 0.05 and abs(pitch_delta_applied) < 0.05:
             print(f"[MOVE]  (Khong co di chuyen nao dang ke)")
 
-        self._run_parallel_motion(
-            yaw_target=yaw_target,
-            pitch_target=pitch_target,
-            x_steps=x_steps,
-            z_steps=z_steps,
-            x_dir=1 if x_dir >= 0 else -1,
-            z_dir=1 if z_dir >= 0 else -1,
-        )
+        if alignment_phase == "translation":
+            # ── Pha 1: CHỈ stepper X/Z ─────────────────────────────────────
+            # Servo KHÔNG được gọi — giữ nguyên góc hiện tại.
+            # X và Z chạy ĐỒNG THỜI trong 2 thread riêng.
+            print(f"[MOVE]  [TRANSLATION ONLY] Servo giu nguyen: Yaw={self.hardware.current_yaw}° Pitch={self.hardware.current_pitch}°")
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = []
+                if x_steps > 0:
+                    futures.append(executor.submit(
+                        self._move_slider_x_with_profile, x_steps, 1 if x_dir >= 0 else -1
+                    ))
+                if z_steps > 0:
+                    futures.append(executor.submit(
+                        self._move_slider_z_with_profile, z_steps, 1 if z_dir >= 0 else -1
+                    ))
+                for f in futures:
+                    f.result()
+
+        elif alignment_phase == "rotation":
+            # ── Pha 2: CHỈ servo Pan/Tilt ──────────────────────────────────
+            # Stepper KHÔNG được gọi — giữ nguyên vị trí cơ khí.
+            print(f"[MOVE]  [ROTATION ONLY] Stepper giu nguyen: X={x_steps_before} Z={z_steps_before} buoc")
+            if abs(yaw_delta_applied) >= 0.05 or abs(pitch_delta_applied) >= 0.05:
+                self.hardware.set_pan_tilt(yaw_target, pitch_target)
+            else:
+                print(f"[MOVE]  (Goc servo da trong dung sai, bo qua)")
+
+        else:
+            # ── Lệnh thông thường (không có alignment_phase): chạy song song ──
+            self._run_parallel_motion(
+                yaw_target=yaw_target,
+                pitch_target=pitch_target,
+                x_steps=x_steps,
+                z_steps=z_steps,
+                x_dir=1 if x_dir >= 0 else -1,
+                z_dir=1 if z_dir >= 0 else -1,
+            )
+
         print(
             f"[MOVE] Hoan thanh -> Servo: Yaw={self.hardware.current_yaw}° Pitch={self.hardware.current_pitch}° | "
             f"Slider (odo tu khoi dong): X={self.hardware.current_x_steps} Z={self.hardware.current_z_steps} buoc"

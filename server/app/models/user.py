@@ -14,7 +14,6 @@ def _gen_id() -> str:
     return secrets.token_hex(3)
 
 class UserRole(str, enum.Enum):
-    # Đổi tên thành chữ thường để khớp với nhãn trong Postgres ENUM
     admin = "admin"
     operator = "operator"
 
