@@ -1,3 +1,14 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+server/.env
+server/.env.*
+!server/env*.example
+embed/device_agent/.env
+client/artifact_app/.env*
+
 # Python virtual environments
 .venv/
 .venv311/
@@ -5,12 +16,10 @@ venv/
 env/
 .venv_test/
 
-# Python cache and bytecode
+# Python cache and tooling
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Python tooling caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -18,17 +27,17 @@ __pycache__/
 .coverage.*
 htmlcov/
 
-# Packaging artifacts
+# Python packaging artifacts
 build/
 dist/
 *.egg-info/
 .eggs/
 pip-wheel-metadata/
 
-
 # IDE/editor
 .vscode/
 .idea/
+*.swp
 
 # OS files
 .DS_Store
@@ -47,12 +56,15 @@ Thumbs.db
 *.dylib
 *.a
 *.lib
-# Compiled Python extension modules (platform-specific, built by cmake/pybind11)
 *.so
 *.pyd
 CMakeFiles/
 CMakeCache.txt
+CTestTestfile.cmake
+Testing/
 cmake-build-*/
+compile_commands.json
+install_manifest.txt
 .ninja_log
 .ninja_deps
 CMakeConfigureLog.yaml
@@ -67,18 +79,17 @@ server/native/third_party/g2o/build/
 server/native/third_party/g2o/build*/
 server/native/third_party/g2o/install/
 
-# Runtime artifacts
+# Runtime data
+server/data/
 server/uploads/
-server/data/uploads/
-server/data/logs/
-server/data/*.db
+server/device_registry.json
 embed/device_agent/mqtt_events.jsonl
 embed/device_agent/data/pictures/
-server/device_registry.json
-server/data/device_registry.json
-server/data/
+*.db
+*.sqlite
+*.sqlite3
 
-# Mobile app generated/dependency artifacts (Flutter)
+# Flutter/Dart generated artifacts
 client/artifact_app/.dart_tool/
 client/artifact_app/.flutter-plugins
 client/artifact_app/.flutter-plugins-dependencies
@@ -90,7 +101,9 @@ client/artifact_app/coverage/
 
 # Android generated outputs
 client/artifact_app/android/.gradle/
+client/artifact_app/android/build/
 client/artifact_app/android/local.properties
+client/artifact_app/android/app/.cxx/
 client/artifact_app/android/app/debug/
 client/artifact_app/android/app/profile/
 client/artifact_app/android/app/release/
@@ -107,7 +120,7 @@ client/artifact_app/macos/.symlinks/
 client/artifact_app/linux/flutter/ephemeral/
 client/artifact_app/windows/flutter/ephemeral/
 
-# Datasets & weights
+# Datasets, training outputs, and model weights
 *.zip
 *.pt
 yolo_dataset/
@@ -117,20 +130,21 @@ runs/
 test/
 temp/
 analysis_output/
-__pycache__/
-
-# AI module local artifacts
 ai_module/data/
 ai_module/snapshots/
 ai_module/pipeline_output/
 
-# Docs cá nhân
+# Personal/exported documents
+private_docs/
+docs/private/
 *.docx
 *.pdf
-*.png
-
-model/
+*.local.docx
+*.local.pdf
 PROJECT_AUDIT_REPORT.md
 BAOCAO*.md
 prompt*.md
 /backups
+
+# Local model directory mounted into Docker
+model/
